@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "the-great-gui (debug)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/.build/debug/GreatGUI",
+      "preLaunchTask": "swift: build",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

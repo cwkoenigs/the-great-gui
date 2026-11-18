@@ -1,0 +1,92 @@
+# the-great-gui · your commands. One file; edit it by hand and the window reloads.
+#
+# [[command]]        name (unique: lowercase, digits, . _ -), group, desc, run (a shell line), tags
+#   cwd              where it runs; ~ and {param} allowed
+#   interactive      true for a program that needs a terminal: it runs in the embedded one
+#   gate             true to ask for Touch ID or your password before it runs
+#   schedule         when it runs on its own, through launchd: every 15m · daily 09:00 · weekdays 08:30 · mon,thu 18:00
+#   env              extra environment; a value "keychain:NAME" is a secret the app fetches at run time
+#   env_file         "keychain:NAME": a whole .env kept in the Keychain; its entries join the environment, never on disk
+#   [[command.param]] name, desc, default, required · {name} in run or cwd is replaced, shell-quoted
+#
+# [[file]]           name, path (where it belongs; write ~), mode (600) · a credential file kept whole in the
+#                    Keychain. Only this pointer is here; great-gui file store NAME keeps its contents.
+
+[[command]]
+name = "brew-outdated"
+group = "mac"
+desc = "what Homebrew would upgrade"
+run = "brew outdated --verbose"
+
+[[command]]
+name = "brew-upgrade"
+group = "mac"
+desc = "upgrade one formula"
+run = "brew upgrade {formula}"
+[[command.param]]
+name = "formula"
+desc = "the formula to upgrade"
+required = true
+
+[[command]]
+name = "uv-tools"
+group = "mac"
+desc = "the Python tools uv has installed"
+run = "uv tool list"
+
+[[command]]
+name = "git-status"
+group = "git"
+desc = "status of a repository"
+run = "git -C {repo} status --short --branch"
+[[command.param]]
+name = "repo"
+desc = "path to the repository"
+default = "~/Developer/the-great-gui"
+
+[[command]]
+name = "git-log"
+group = "git"
+desc = "the last ten commits"
+run = "git -C {repo} log --oneline -10"
+[[command.param]]
+name = "repo"
+default = "~/Developer/the-great-gui"
+
+[[command]]
+name = "ds-next"
+group = "knowledge"
+desc = "the terminal over the canon"
+run = "ds-next"
+cwd = "~/Developer"
+interactive = true
+tags = ["agent", "canon"]
+
+[[command]]
+name = "atlas"
+group = "knowledge"
+desc = "what runs where: the map and picker"
+run = "atlas"
+interactive = true
+
+[[command]]
+name = "tools"
+group = "mac"
+desc = "what is installed, missing and behind"
+run = "great-gui tools --check"
+
+[[command]]
+name = "gitlab-pipelines"
+group = "work"
+desc = "my pipelines, through the API (needs a token in the Keychain)"
+run = "glab ci list"
+env = { GITLAB_TOKEN = "keychain:gitlab-token" }
+gate = true
+
+# A program this Mac should have. The app reports whether it is installed and installs it only when you ask
+# (Tools, ⌘U, or great-gui tools install). method is brew, cask, uv or script.
+# [[tool]]
+# name = "ripgrep"
+# desc = "fast search"
+# method = "brew"
+# bin = "rg"

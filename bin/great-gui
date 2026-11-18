@@ -1,0 +1,12 @@
+#!/bin/sh
+# the-great-gui on the command line: runs the binary inside the app bundle this checkout built, so the
+# Keychain sees the same signed app the window is. Linked into ~/.local/bin by `make install`.
+self="$0"
+if [ -L "$self" ]; then self="$(readlink "$self")"; fi
+root="$(cd "$(dirname "$self")/.." && pwd -P)"
+bin="$root/build/the-great-gui.app/Contents/MacOS/the-great-gui"
+if [ ! -x "$bin" ]; then
+  printf '✗ the app is not built\n  cd %s && make app\n' "$root" >&2
+  exit 2
+fi
+exec "$bin" "$@"

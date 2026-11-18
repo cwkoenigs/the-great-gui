@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "swift: build", "type": "shell", "command": "swift build", "group": { "kind": "build", "isDefault": true }, "problemMatcher": "$swiftc" },
+    { "label": "swift: test", "type": "shell", "command": "swift test", "group": { "kind": "test", "isDefault": true }, "problemMatcher": "$swiftc" },
+    { "label": "app: run", "type": "shell", "command": "make run", "problemMatcher": [] },
+    { "label": "window: snapshot", "type": "shell", "command": "make snapshot", "problemMatcher": [] }
+  ]
+}

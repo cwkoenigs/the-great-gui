@@ -1,0 +1,8 @@
+.build/
+.build-clt/
+build/
+.swiftpm/
+*.xcodeproj
+DerivedData/
+.DS_Store
+.sign-identity
