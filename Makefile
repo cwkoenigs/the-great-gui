@@ -9,11 +9,11 @@ build:             ## debug build with the command-line tools
 test:              ## the tests
 	swift test
 
-check: test        ## tests, Tokens.swift agrees with ds-cli-design's tokens.json, and the tools-only build
+check: test        ## tests, Tokens.swift agrees with canon's terminal design tokens, and the tools-only build
 	python3 scripts/gen_tokens.py --check
 	DEVELOPER_DIR=/Library/Developer/CommandLineTools swift build --scratch-path .build-clt
 
-tokens:            ## regenerate Tokens.swift from ds-cli-design's tokens.json
+tokens:            ## regenerate Tokens.swift from canon's terminal design tokens
 	python3 scripts/gen_tokens.py
 
 app:               ## release build wrapped as build/the-great-gui.app (SIGN_IDENTITY=… for a stable signature)

@@ -78,7 +78,7 @@ a small `@Observable` or `ObservableObject` model held by `@StateObject` (see `T
 | `make update` | pull this checkout, `make install`, and quit and reopen the app if it was running |
 | `make uninstall` · `make skills` | unlink the command and the skills · relink the skills |
 | `make build` / `make test` | debug build; the tests (`swift build`, `swift test`) |
-| `make check` | tests, and `Tokens.swift` agrees with ds-cli-design's `tokens.json` |
+| `make check` | tests, and `Tokens.swift` agrees with canon's terminal design `tokens.json` |
 | `make tokens` | regenerate `Sources/TerminalDesign/Tokens.swift` from a new design export |
 | `make app` | release build wrapped as `build/the-great-gui.app`; `SIGN_IDENTITY="…" make app` signs with a named certificate |
 | `assets/make-icon.sh` | redraw the app icon from `assets/make-icon.swift` (only after changing the artwork) |
@@ -389,7 +389,7 @@ is the one way a command is added), `Runner` (a plain run: lines out, exit code,
 `great-gui` command line, reached through `bin/great-gui`).
 
 `Sources/TerminalDesign` is the terminal design system in Swift. `Tokens.swift` is generated from
-ds-cli-design's `tokens.json` (`scripts/gen_tokens.py`), so every colour, glyph and grid value exists
+canon's terminal design `tokens.json` (`scripts/gen_tokens.py`), so every colour, glyph and grid value exists
 once, in the export. The primitives are the web kit's, rewritten as SwiftUI views on a fixed line grid:
 Term, Line, You, Agent, Run, ResultLine, Status, Footer, Outcome, Labelled, Hint, ErrorLine, Frame,
 Prompt, Toolbar, SlashMenu, Mascot, Banner, plus `Draw` (the pure row builders) and `Row`.
@@ -398,7 +398,10 @@ Three names differ from the kit: `ResultLine` (Swift owns `Result`), `SlashMenu`
 and keys are `Draw.key(...)`, a run inside a row rather than a view. Two deliberate deviations: `Banner`
 takes a name (the kit hardcodes ds-next), and its `┬` sits over the `┴` and the wall (the kit is one cell
 off). One fidelity note: `SlashMenu`'s footer keeps the kit's `▼`, which `tokens.json` lists as retired;
-raise it in ds-cli-design, not here.
+raise it in canon's terminal design export.
+
+`make tokens` and the token check use `terminal-design/design-system/tokens.json` in the canon
+checkout. Set `DS_CANON` if the checkout lives outside `~/Developer/canon`.
 
 The window takes its colours, its mono face and the embedded terminal's palette from this target. The
 grid primitives are no longer drawn by the app since the terminal look went (local-032); they stay here,
