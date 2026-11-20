@@ -15,8 +15,12 @@ struct TerminalPane: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
-        let view = LocalProcessTerminalView(frame: .zero)
-        view.processDelegate = context.coordinator
+        makeTerminal(coordinator: context.coordinator)
+    }
+
+    func makeTerminal(coordinator: Coordinator) -> LocalProcessTerminalView {
+        let view = MountedTerminalView(frame: .zero)
+        view.processDelegate = coordinator
         view.font = TermFont.nsFont()
         Self.apply(theme, to: view)
         var env = ProcessInfo.processInfo.environment
@@ -24,11 +28,16 @@ struct TerminalPane: NSViewRepresentable {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         let shell = ProcessRun.defaultShell()
-        view.startProcess(executable: shell, args: ["-lic", run.run], environment: env.map { "\($0.key)=\($0.value)" },
-                          execName: nil, currentDirectory: run.cwd)
-        // The pane takes the keyboard as soon as it is in a window; the split view's lists may hold it a beat longer.
-        for delay in [0.0, 0.15, 0.4] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { view.window?.makeFirstResponder(view) }
+        view.launch = { [run] terminal in
+            terminal.startProcess(executable: shell, args: ["-lic", run.run],
+                                  environment: env.map { "\($0.key)=\($0.value)" }, currentDirectory: run.cwd)
+            // The split view's lists may hold the keyboard a beat longer.
+            for delay in [0.0, 0.15, 0.4] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak terminal] in
+                    guard let terminal else { return }
+                    terminal.window?.makeFirstResponder(terminal)
+                }
+            }
         }
         return view
     }
@@ -64,5 +73,26 @@ struct TerminalPane: NSViewRepresentable {
         func processTerminated(source: TerminalView, exitCode: Int32?) {
             DispatchQueue.main.async { [onExit] in onExit(exitCode) }
         }
+    }
+}
+
+private final class MountedTerminalView: LocalProcessTerminalView {
+    var launch: ((LocalProcessTerminalView) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        launchIfReady()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        launchIfReady()
+    }
+
+    private func launchIfReady() {
+        // A fast shell can finish before SwiftUI attaches and sizes the terminal.
+        guard let launch, window != nil, bounds.width > 0, bounds.height > 0 else { return }
+        self.launch = nil
+        launch(self)
     }
 }
