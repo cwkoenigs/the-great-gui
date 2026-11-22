@@ -127,15 +127,17 @@ extension AppModel {
 
     // MARK: the secret and file sheets
 
-    func openSecretSheet(named name: String = "") {
+    func openSecretSheet(named name: String = "", rotating: Bool = false) {
         newSecretName = name
         newSecretValue = ""
+        rotatingSecret = rotating
         secretSheetOpen = true
     }
 
     /// Cancel: the typed value goes with the sheet.
     func closeSecretSheet() {
         newSecretValue = ""
+        rotatingSecret = false
         secretSheetOpen = false
     }
 

@@ -128,6 +128,22 @@ window frame, the sidebar's material and the search field. How it came about: `d
 
 ## Use
 
+### Reuse CLI and API credentials
+
+In **Secrets**, add the token, password, or text key under a Keychain name, or register a whole
+credential file. Choose **Add Profile**, give it a label and destination, and add the environment
+bindings the client expects. A profile can also point to a stored `.env` or a file the client needs
+at its registered local path. Profiles are local to the registry and Keychain service.
+
+In a command editor, choose **Use Credential Profile**. The command saves the selected Keychain
+references, so **Rotate** on the underlying secret updates every command that uses that name.
+For a file-based client, use **Store** to keep a replacement file in Keychain and **Restore** when
+the client needs its local copy. A Keychain-backed `.env` can instead be loaded without that copy.
+
+**Check** verifies credential availability. If the profile has a user-supplied read-only check,
+Great GUI also runs it on demand and shows its exit result. The destination field identifies the
+service for review. The command you configure determines where a live check connects.
+
 `~/.great-gui/commands.toml` is your registry; the app writes the example there on first launch and
 reloads when the file changes (`GREAT_GUI_REGISTRY` points elsewhere). ⌥⌘E opens it in your editor.
 

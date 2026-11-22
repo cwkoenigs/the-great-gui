@@ -32,6 +32,119 @@ final class GreatGUITests: XCTestCase {
                         scheduler: Snapshot.inertScheduler(in: dir), watch: false)
     }
 
+    func testCredentialProfileSetupReuseRotationAndChecks() async throws {
+        let suite = "great-gui-credentials-tests-\(UUID().uuidString)"
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = SecretStore(service: suite)
+        let registry = dir.appendingPathComponent("credentials.toml")
+        let history = HistoryStore(url: dir.appendingPathComponent("credential-history.json"))
+        let name = "fixture-token"
+        defer {
+            try? store.delete(name)
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try "".write(to: registry, atomically: true, encoding: .utf8)
+        let m = AppModel(registryURL: registry, store: history, secrets: store,
+                         scheduler: Snapshot.inertScheduler(in: dir), watch: false, preferences: preferences)
+        m.openSecretSheet(named: name)
+        m.newSecretValue = "fixture8"
+        m.saveSecretFromSheet()
+        XCTAssertTrue(store.exists(name))
+
+        let profiles = m.credentialProfiles
+        profiles.open()
+        profiles.draft.label = "Example API"
+        profiles.draft.destination = "api.example.com"
+        profiles.draft.bindings = "API_TOKEN=fixture8"
+        XCTAssertFalse(profiles.save())
+        XCTAssertFalse(profiles.note?.text.contains("fixture8") ?? true)
+        profiles.draft.bindings = "API_TOKEN=keychain:\(name)"
+        profiles.draft.checkCommand = "test \"${#API_TOKEN}\" -eq 8"
+        XCTAssertTrue(profiles.save())
+        let profile = try XCTUnwrap(profiles.entries.first)
+        let reloaded = CredentialProfiles(registryURL: registry, service: store.service, preferences: preferences)
+        XCTAssertEqual(reloaded.entries, [profile])
+        XCTAssertTrue(CredentialProfiles(registryURL: registry, service: suite + ".other", preferences: preferences).entries.isEmpty)
+
+        profiles.check(profile, files: [], secrets: store)
+        try await waitFor { profiles.checking == nil }
+        XCTAssertEqual(profiles.results[profile.id]?.text, "Live check passed")
+        XCTAssertTrue(history.load().isEmpty)
+
+        let commands = ["first-check", "second-check"]
+        for command in commands {
+            m.openNewCommand()
+            m.draft.name = command
+            m.draft.run = "printf '%s\\n' \"${#API_TOKEN}\""
+            m.useCredentialProfileInDraft(profile)
+            m.saveDraft()
+            XCTAssertEqual(m.registry?.command(named: command)?.env["API_TOKEN"], .keychain(name))
+            m.runSelected()
+            try await waitFor { m.run?.isDone == true }
+            XCTAssertEqual(m.run?.lines, ["8"])
+        }
+
+        m.openSecretSheet(named: name, rotating: true)
+        m.newSecretValue = "rotated-value"
+        m.saveSecretFromSheet()
+        XCTAssertNil(profiles.results[profile.id])
+        for command in commands {
+            m.select(command)
+            m.runSelected()
+            try await waitFor { m.run?.isDone == true }
+            XCTAssertEqual(m.run?.lines, ["13"])
+        }
+        profiles.check(profile, files: [], secrets: store)
+        try await waitFor { profiles.checking == nil }
+        XCTAssertEqual(profiles.results[profile.id]?.text, "Live check failed (exit 1)")
+
+        var missing = profile
+        missing.bindings = "API_TOKEN=keychain:missing-fixture"
+        profiles.check(missing, files: [], secrets: store)
+        try await waitFor { profiles.checking == nil }
+        XCTAssertTrue(profiles.results[profile.id]?.text.contains("missing-fixture") ?? false)
+        let saved = try String(contentsOf: registry, encoding: .utf8)
+        XCTAssertFalse(saved.contains("fixture8"))
+        XCTAssertFalse(saved.contains("rotated-value"))
+    }
+
+    func testCredentialProfileDistinguishesEnvInjectionFromRequiredFile() async throws {
+        let suite = "great-gui-credential-file-tests-\(UUID().uuidString)"
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = SecretStore(service: suite)
+        let name = "fixture-env"
+        defer {
+            try? store.delete(name)
+            preferences.removePersistentDomain(forName: suite)
+        }
+        _ = try store.set(name, value: "FIXTURE_ENV=fixture\n")
+        let uri = dir.appendingPathComponent("fixture.env")
+        let file = SecretFile(name: name, path: uri.path)
+        let profiles = CredentialProfiles(registryURL: dir.appendingPathComponent("other.toml"),
+                                          service: suite, preferences: preferences)
+        var profile = CredentialProfile(label: "Test file", destination: "Test client", file: name,
+                                        checkCommand: "test -n \"$FIXTURE_ENV\"")
+        profiles.check(profile, files: [file], secrets: store)
+        try await waitFor { profiles.checking == nil }
+        XCTAssertEqual(profiles.results[profile.id]?.text, "Live check passed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: uri.path))
+
+        profile.fileUse = .localFile
+        profiles.check(profile, files: [file], secrets: store)
+        try await waitFor { profiles.checking == nil }
+        XCTAssertEqual(profiles.results[profile.id]?.text, "Credential file fixture-env is not on this Mac")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: uri.path))
+    }
+
+    private func waitFor(_ condition: () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw NSError(domain: "ScratchSessionTest", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for the shell"])
+    }
+
     // MARK: a copy of a team command (DECISIONS local-037)
 
     func testACopyOfATeamCommandDoesNotCarryItsSchedule() throws {

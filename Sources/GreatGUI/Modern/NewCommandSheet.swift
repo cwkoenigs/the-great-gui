@@ -56,6 +56,14 @@ struct NewCommandSheet: View {
             }
             .formSection("2 · What it asks for, and where it runs (optional)", palette)
             VStack(alignment: .leading, spacing: 12) {
+                if !model.credentialProfiles.entries.isEmpty {
+                    Menu("Use Credential Profile") {
+                        ForEach(model.credentialProfiles.entries) { profile in
+                            Button(profile.label + " · " + profile.destination) { model.useCredentialProfileInDraft(profile) }
+                        }
+                    }
+                    .menuStyle(.borderlessButton).fixedSize()
+                }
                 LabeledField(palette: palette, label: "Environment", hint: "KEY=value, with ; between several. Insert secret adds one whose value is read from the Keychain when it runs, so it is never written here.") {
                     HStack {
                         TextField("Environment", text: $model.draft.env, prompt: Text("TOKEN=keychain:gitlab-token; PAGER=cat")).font(Palette.mono).fieldBox(palette)
@@ -127,7 +135,7 @@ struct NewCommandSheet: View {
                     .codeBlock(palette)
                 if !preview.fix.isEmpty { Text(preview.fix).font(.callout).foregroundStyle(palette.warn) }
             }
-            if let note = model.registryNote, !note.ok { NoteLine(note: note, palette: palette) }
+            if let note = model.registryNote { NoteLine(note: note, palette: palette) }
         } actions: {
             Button("Cancel") { model.closeNewCommand() }.secondaryButton(palette).keyboardShortcut(.cancelAction)
             Button(model.isEditing ? "Save" : "Add") { model.saveDraft() }.primaryButton(palette).keyboardShortcut(.defaultAction)

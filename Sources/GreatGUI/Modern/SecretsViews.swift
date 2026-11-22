@@ -11,9 +11,11 @@ struct SecretsScreen: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        @Bindable var profiles = model.credentialProfiles
         let palette = Palette(scheme: scheme)
         let pending = Binding(get: { model.pendingRestore != nil }, set: { if !$0 { model.cancelRestore() } })
         Screen(palette: palette, kicker: "Keychain · this Mac only", title: "Secrets", summary: summary) {
+            Button("Add Profile") { profiles.open() }.secondaryButton(palette)
             Button { model.openSecretSheet() } label: { Label("Add secret", systemImage: "plus") }
                 .primaryButton(palette).help("Add or replace a secret")
             Button { model.openFileSheet() } label: { Label("Add file", systemImage: "doc.badge.plus") }
@@ -21,7 +23,7 @@ struct SecretsScreen: View {
         } help: {
             SecretsHelp(palette: palette)
         } content: {
-            if model.secretRows.isEmpty && model.fileRows.isEmpty {
+            if model.secretRows.isEmpty && model.fileRows.isEmpty && profiles.entries.isEmpty {
                 EmptyState(palette: palette, title: "No secrets yet",
                            text: "A secret is one value, such as a token. A file is a whole credential file, such as a .env or Snowflake's connections.toml. Both are kept in your Keychain, on this Mac only.") {
                     Button("Add a secret") { model.openSecretSheet() }.primaryButton(palette)
@@ -31,6 +33,9 @@ struct SecretsScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if let note = model.secretsNote { NoteLine(note: note, palette: palette).padding(.horizontal, 24).padding(.vertical, 12) }
+                        if !profiles.entries.isEmpty {
+                            CredentialProfileRows(palette: palette).padding(.bottom, 22)
+                        }
                         if !model.secretRows.isEmpty { secrets(palette) }
                         if !model.fileRows.isEmpty { files(palette).padding(.top, model.secretRows.isEmpty ? 0 : 22) }
                     }
@@ -42,6 +47,9 @@ struct SecretsScreen: View {
             Button("Cancel", role: .cancel) { model.cancelRestore() }
         } message: {
             Text("The file on disk differs from the copy in the Keychain. Restoring replaces the file; Store would keep the file's version instead.")
+        }
+        .sheet(isPresented: $profiles.editorOpen, onDismiss: model.refreshSecrets) {
+            CredentialProfileSheet()
         }
         .onAppear { model.refreshSecrets() }
     }
@@ -55,22 +63,23 @@ struct SecretsScreen: View {
 
     private func secrets(_ palette: Palette) -> some View {
         VStack(spacing: 0) {
-            HeaderRow(palette: palette, columns: [("Secret", 260), ("Keychain", 150), ("Used by", nil), ("", 70)])
+            HeaderRow(palette: palette, columns: [("Secret", 240), ("Keychain", 130), ("Used by", nil), ("", 120)])
             ForEach(model.secretRows) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 16) {
-                    Text(row.name).font(Palette.mono).lineLimit(1).truncationMode(.middle).help(row.name).cell(260)
+                    Text(row.name).font(Palette.mono).lineLimit(1).truncationMode(.middle).help(row.name).cell(240)
                     Label(row.inKeychain ? "in Keychain" : "missing", systemImage: row.inKeychain ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(row.inKeychain ? palette.ok : palette.warn).cell(150)
+                        .foregroundStyle(row.inKeychain ? palette.ok : palette.warn).cell(130)
                     Text(row.usedBy.isEmpty ? "no command" : row.usedBy.joined(separator: ", "))
                         .foregroundStyle(row.usedBy.isEmpty ? palette.muted : palette.ink).lineLimit(2).cell(nil)
-                    Group {
+                    HStack(spacing: 10) {
                         if row.inKeychain {
+                            Button("Rotate") { model.openSecretSheet(named: row.name, rotating: true) }.rowAction(palette)
                             Button("Delete") { model.deleteSecret(row.name) }.rowAction(palette, destructive: true)
                         } else {
                             Button("Add") { model.openSecretSheet(named: row.name) }.rowAction(palette)
                         }
                     }
-                    .cell(70)
+                    .cell(120)
                 }
                 .font(.callout)
                 .tableRow(palette)
@@ -134,6 +143,11 @@ private struct SecretsHelp: View {
     let palette: Palette
 
     var body: some View {
+        guide("A credential profile", "Reuse one set of Keychain references across commands.", [
+            "Press Add Profile and give it a label and destination. Select existing secrets or a credential file.",
+            "Use Check to verify the credential is available, or run the read-only check you configured.",
+            "In the command editor, choose Use Credential Profile. Rotate the original secret when it changes.",
+        ])
         guide("A secret: one value", "A token or a password a command needs.", [
             "Press Add secret, give it a name such as gitlab-token, and paste the value. It is never shown again.",
             "In a command, open Edit and use Insert secret under Environment. That writes TOKEN=keychain:gitlab-token.",
@@ -182,13 +196,15 @@ struct SecretSheet: View {
     var body: some View {
         @Bindable var model = model
         let palette = Palette(scheme: scheme)
-        SheetFrame(palette: palette, title: "Add a Secret", footnote: "Saved in your login keychain under \(model.secrets.service). It stays on this Mac.",
+        SheetFrame(palette: palette, title: model.rotatingSecret ? "Rotate a Secret" : "Add a Secret",
+                   footnote: "Saved in your login keychain under \(model.secrets.service). It stays on this Mac.",
                    width: 520, height: 330) {
             EmptyView()
         } content: {
             LabeledField(palette: palette, label: "Name", hint: "How commands refer to it: letters, digits, dots and dashes.") {
                 TextField("Name", text: $model.newSecretName, prompt: Text("gitlab-token"))
                     .font(Palette.mono).fieldBox(palette)
+                    .disabled(model.rotatingSecret)
                     .focused($focus, equals: .name)
                     .onSubmit { focus = .value }
             }

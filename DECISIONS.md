@@ -802,3 +802,35 @@ Local decisions for the-great-gui, newest last. Format as in ds-next.
   and picks Paper and Ink in Settings once; no code reads the old name. Nothing that names an employer,
   a work product or a file on a work machine goes into this repository, a commit message included.
 - **Validation:** `make check`. No file and no commit in the public repository carries the old name.
+
+## local-043: Set up reusable credentials once
+
+- **Status:** Accepted
+- **Date:** 2026-11-22
+- **Context:** A user wants to set up a credential in Great GUI, test it, and reuse it from commands
+  without re-entering its value. The initial validation target is a local build with an isolated
+  registry and Keychain service.
+- **Decision:** Give each reusable connection a label, destination, credential method, and
+  references to its Keychain items. Let the user set it up and select it from the existing command
+  editor. Reuse the existing secret and file storage paths. Keep connection settings in Keychain
+  when the client can consume them at runtime. If a client requires a credential file, show its
+  local file requirement during setup. Profiles are local presets scoped to the registry and
+  Keychain service. Applying one copies its references into the command so the existing command-line
+  and scheduler paths continue to run it.
+- **Test behavior:** Use an explicit, provider-specific read-only check when available. Report
+  Keychain availability separately from live authentication. A test result can show the check and
+  its outcome. Credential values stay out of output, history, registry commits, and model context.
+- **Scope:** CLI and API credentials. Browser logins need separate
+  decisions about destination matching, browser autofill, and account sign-in policy.
+- **Validation:** `make check` passed. Isolated tests reused one Keychain item in two commands,
+  rotated it, and verified both commands received the replacement. The tests exercised a missing
+  reference, a rejected check, and a credential file that needs restoring. In the signed app,
+  a profile and an existing saved command checked a loopback API after rotation.
+
+| Phase | State | Exit criteria |
+| --- | --- | --- |
+| Discovery | Complete | Existing Keychain storage, credential-file storage, and runtime injection provide the starting points. |
+| Scope review | Complete | CLI and API credentials approved. |
+| Implementation | Complete | Profile setup, selection, explicit checks, and rotation are available. |
+| Local verification | Complete | Automated and signed-app checks passed with isolated credentials. |
+| Cleanup | Complete | The README describes the workflow. |

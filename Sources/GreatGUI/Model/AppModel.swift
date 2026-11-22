@@ -191,10 +191,12 @@ final class AppModel {
 
     // MARK: secrets
     let secrets: SecretStore
+    let credentialProfiles: CredentialProfiles
     private(set) var secretRows: [SecretRow] = []
     var secretsNote: Note?
     var newSecretName = ""
     var newSecretValue = ""
+    var rotatingSecret = false
 
     // MARK: credential files, kept whole in the Keychain
     private(set) var fileRows: [FileRow] = []
@@ -260,12 +262,14 @@ final class AppModel {
     }
 
     init(registryURL: URL = Registry.defaultURL(), teamURL: URL? = nil, store: HistoryStore = HistoryStore(),
-         secrets: SecretStore = SecretStore(), scheduler: Scheduler? = nil, watch: Bool = true) {
+         secrets: SecretStore = SecretStore(), scheduler: Scheduler? = nil, watch: Bool = true,
+         preferences: UserDefaults = .standard) {
         self.registryURL = registryURL
         self.teamURL = teamURL ?? Registry.teamURL(for: registryURL)
         self.watching = watch
         self.store = store
         self.secrets = secrets
+        credentialProfiles = CredentialProfiles(registryURL: registryURL, service: secrets.service, preferences: preferences)
         self.scheduler = scheduler ?? Scheduler(program: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
         self.history = store.load()
         reload()
@@ -551,6 +555,31 @@ final class AppModel {
         registryIsRepository = RegistryWriter.isRepository(registryURL)
         prepareForm()
         newCommandOpen = true
+    }
+
+    func useCredentialProfileInDraft(_ profile: CredentialProfile) {
+        do {
+            var environment = try RegistryWriter.parseEnvs(draft.env)
+            for (key, value) in try profile.environment() {
+                if let current = environment[key], current != value {
+                    throw RegistryError("The command already sets \(key)", fix: "Clear or reconcile it before applying this profile.")
+                }
+                environment[key] = value
+            }
+            let file = profile.envFile.map { EnvValue.keychainPrefix + $0 }
+            if let file, !draft.envFile.isEmpty, draft.envFile != file {
+                throw RegistryError("The command already uses a different env file", fix: "Select the env file you want before saving.")
+            }
+            draft.env = RegistryWriter.envSpec(environment)
+            if let file { draft.envFile = file }
+            registryNote = profile.requiredLocalFile.map { name in
+                Note(ok: true, text: "This client needs the \(name) file at its configured path", fix: "Use Check in Secrets to verify the local copy.")
+            }
+        } catch let error as RegistryError {
+            registryNote = Note(ok: false, text: error.what, fix: error.fix)
+        } catch {
+            registryNote = Note(ok: false, text: "Could not apply the credential profile")
+        }
     }
 
     /// The same form, filled from the command; Save rewrites its block.
@@ -960,7 +989,14 @@ final class AppModel {
                                    states: [String: Result<FileSecrets.State, SecretsLookFailure>]) {
         guard look == secretsLook else { return }
         if let problem { secretsNote = Note(ok: false, text: problem) }
-        let referenced = Set((registry?.commands ?? []).flatMap(\.secretNames))
+        let profileReferences = credentialProfiles.entries.flatMap { profile -> [String] in
+            let environment = (try? profile.environment()) ?? [:]
+            return environment.values.compactMap { value -> String? in
+                if case .keychain(let name) = value { return name }
+                return nil
+            }
+        }
+        let referenced = Set((registry?.commands ?? []).flatMap(\.secretNames) + profileReferences)
         let entries = registry?.files ?? []
         let fileNames = Set(entries.map(\.name))
         // A file's Keychain item is listed with the files, not twice.
@@ -1099,6 +1135,7 @@ final class AppModel {
             secretsNote = Note(ok: true, text: "\(name) \(replaced ? "replaced" : "saved") · \(usage)")
             newSecretName = ""
             newSecretValue = ""
+            credentialProfiles.invalidateChecks()
             refreshSecrets()
         } catch {
             secretsNote = Note(ok: false, text: "\(error)")
@@ -1108,6 +1145,7 @@ final class AppModel {
     func deleteSecret(_ name: String) {
         do {
             try secrets.delete(name)
+            credentialProfiles.invalidateChecks()
             secretsNote = Note(ok: true, text: "\(name) deleted")
             refreshSecrets()
         } catch {
