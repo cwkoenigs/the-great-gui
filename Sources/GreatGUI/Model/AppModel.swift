@@ -43,10 +43,12 @@ final class AppModel {
         case scheduled
         case team
         case tools
+        case docs
         case secrets
         case history
     }
     var destination: Destination = .all
+    let docs = DocsLibrary()
 
     enum DetailTab: String, CaseIterable, Identifiable {
         case output = "Output", terminal = "Terminal", history = "History", log = "Log"
@@ -80,6 +82,7 @@ final class AppModel {
 
     /// Run the selected command with the detail's parameter values (Run, ⌘↩).
     func runSelected() {
+        guard destination != .docs else { return }
         guard let c = selectedCommand else { return }
         registryNote = nil
         start(c, params: c.params.isEmpty ? [:] : paramValues)

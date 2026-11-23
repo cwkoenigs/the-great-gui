@@ -97,6 +97,7 @@ private struct Sidebar: View {
                 row(.scheduled, "Scheduled", "calendar.badge.clock", model.scheduled.count, palette)
                 if model.teamStatus.joined { row(.team, "Team", "person.2", model.teamCommandCount, palette) }
                 row(.tools, "Tools", "shippingbox", model.toolsAttention, palette, attention: model.toolsAttention > 0)
+                row(.docs, "Docs", "book", 0, palette)
                 row(.secrets, "Secrets", "key", 0, palette)
                 row(.history, "History", "clock", model.history.count, palette)
             }
@@ -108,7 +109,7 @@ private struct Sidebar: View {
             model.helpOpen = false
             if d == .secrets { model.refreshSecrets() }
             if d == .tools { model.refreshTools() }
-            if d != .secrets, d != .tools, d != .history { model.clampSelection() }
+            if d != .secrets, d != .tools, d != .docs, d != .history { model.clampSelection() }
         }
     }
 
@@ -203,6 +204,7 @@ private struct MainColumn: View {
             switch model.destination {
             case .secrets: SecretsScreen()
             case .tools: ToolsScreen()
+            case .docs: DocsScreen()
             case .history: HistoryScreen()
             default:
                 HStack(spacing: 0) {
@@ -231,6 +233,7 @@ private struct MainColumn: View {
         case .scheduled: "Scheduled"
         case .team: "Team"
         case .tools: "Tools"
+        case .docs: "Docs"
         case .secrets: "Secrets"
         case .history: "History"
         case .all: "Commands"

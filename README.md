@@ -128,6 +128,17 @@ window frame, the sidebar's material and the search field. How it came about: `d
 
 ## Use
 
+### Browse canon and team skills
+
+Choose **Docs → Open Canon** to read the local knowledge base inside Great GUI. On the first
+open, Great GUI runs `ds-next docs` using your configured canon and team skills. **Refresh**
+rebuilds the site from the current checkouts and reloads the open page. Great GUI keeps the
+last successful build at the same local address until the app quits. Use **Open in Browser**
+to read it in a separate browser tab.
+
+Set up the docs renderer in `ds-next` first. Great GUI needs `ds-next` and Node.js on your
+PATH. To test with a separate docs cache, set `GREAT_GUI_DOCS_CACHE` to a different directory.
+
 ### Reuse CLI and API credentials
 
 In **Secrets**, add the token, password, or text key under a Keychain name, or register a whole

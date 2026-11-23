@@ -834,3 +834,17 @@ Local decisions for the-great-gui, newest last. Format as in ds-next.
 | Implementation | Complete | Profile setup, selection, explicit checks, and rotation are available. |
 | Local verification | Complete | Automated and signed-app checks passed with isolated credentials. |
 | Cleanup | Complete | The README describes the workflow. |
+
+## local-044: Open canon and team skills from Great GUI
+
+- **Status:** Accepted
+- **Date:** 2026-11-23
+- **Context:** The knowledge base is already rendered by ds-next. People need one place to open
+  it without starting a separate ds-next terminal session.
+- **Decision:** Add Docs to the Library sidebar. Great GUI runs `ds-next docs` outside a project
+  to build canon and team skills and hosts the completed static site on IPv4 loopback. macOS
+  assigns a free port when the listener starts. The Docs screen opens the site in WebKit and
+  offers a separate browser action.
+- **Refresh:** Publish the completed output at the existing cache path and reload the open page.
+  Keep the current site available during builds and after a build failure. Close the listener
+  when Great GUI exits.
