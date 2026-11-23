@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -81,6 +82,46 @@ class UpdateTests(unittest.TestCase):
                          self.preview.replace("footer", "staged footer"))
         self.assertEqual((self.repo / "guide").read_text(), local)
 
+    def test_one_update_merges_remote_changes_into_staged_and_working_versions(self):
+        guide = self.repo / "guide"
+        (self.repo / ".git/info/attributes").write_text("guide text eol=crlf\n")
+        guide.write_bytes(self.base.replace("footer", "staged footer").replace("\n", "\r\n").encode())
+        self.git(self.repo, "add", "guide")
+        working = self.base.replace("footer", "working footer").replace("\n", "\r\n")
+        guide.write_bytes(working.encode())
+        guide.chmod(0o600)
+        (self.repo / "new page").write_text("published\n")
+
+        result = self.update()
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), self.git(self.origin, "rev-parse", "HEAD"))
+        self.assertEqual(guide.read_bytes(), working.replace("title", "published title").encode())
+        self.assertEqual(stat.S_IMODE(guide.stat().st_mode), 0o600)
+        self.assertEqual(self.git(self.repo, "show", ":guide").decode(),
+                         self.preview.replace("footer", "staged footer"))
+        self.assertTrue((self.repo / "built").exists())
+
+    def test_refused_fast_forward_restores_the_original_working_file(self):
+        guide = self.repo / "guide"
+        local = self.base.replace("footer", "working footer")
+        guide.write_text(local)
+        before = self.git(self.repo, "rev-parse", "HEAD")
+        before_index = self.git(self.repo, "write-tree")
+        hook = self.repo / ".git/hooks/reference-transaction"
+        hook.write_text('#!/bin/sh\n[ "$1" = prepared ] || exit 0\n'
+                        'while read old new ref; do\n'
+                        '  if [ "$ref" = refs/heads/main ]; then cp guide hook-saw; exit 1; fi\n'
+                        'done\n')
+        hook.chmod(0o755)
+        result = self.update()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((self.repo / "hook-saw").read_text(), self.preview.replace("footer", "working footer"))
+        self.assertEqual(guide.read_text(), local)
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD"), before)
+        self.assertEqual(self.git(self.repo, "write-tree"), before_index)
+        self.assertFalse((self.repo / "built").exists())
+
     def test_hook_staging_and_interrupted_merge(self):
         # Interrupt the merge after HEAD advances, while a real post-merge hook is running.
         (self.repo / "new page").write_text("published\n")
@@ -131,7 +172,8 @@ class UpdateTests(unittest.TestCase):
                     self.assertEqual((self.repo / ".git/index.lock").read_bytes(), b"another Git writer")
 
     def test_conflict_and_untracked_collision_leave_checkout_intact(self):
-        for local, new in [(self.preview, "different new file\n"), ("conflicting title\n", "published\n")]:
+        for local, new in [(self.base.replace("footer", "local footer"), "different new file\n"),
+                           ("conflicting title\n", "published\n")]:
             with self.subTest(local=local[:8]):
                 (self.repo / "guide").write_text(local)
                 (self.repo / "new page").write_text(new)

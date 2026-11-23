@@ -887,3 +887,18 @@ Local decisions for the-great-gui, newest last. Format as in ds-next.
   of partially staged files, exercise an interrupted merge and verify that a conflict stops before
   the build. The demo menu updated the original Ask Canon preview from `021b765` to `eed36b2`,
   rebuilt and reopened. All 19 checked source files and the demo registry retained their contents.
+
+## local-048: Merge independent edits in the same file during Update
+
+- **Status:** Accepted
+- **Date:** 2026-11-23
+- **Context:** The updater recognized published previews, but refused new upstream text in two
+  documents with unrelated local edits. Its three-way merge succeeded and the result was discarded.
+- **Decision:** Compute the staged and working versions independently. Preflight the fast-forward,
+  then install clean working-file merges before running it. Preserve checkout line endings and
+  permissions. If Git refuses to advance, roll back the working-file replacements that Update made.
+- **Verification:** The regression runs the update script once against a real upstream commit and
+  checks the branch, the staged blob, the working file and the build. An incompatible edit or an
+  untracked collision still stops the update. One demo menu run advanced from `eed36b2` to
+  `c62c6b0`, rebuilt and reopened the app. Both documents matched their expected merged contents,
+  and the other eleven locally edited files retained their contents and permissions.

@@ -44,12 +44,41 @@ def set_entries(entries, env):
         git("update-index", "-z", "--index-info", env=env, data=data)
 
 
+def replace_working(path, expected, content):
+    """Replace a regular file atomically, preserving its permissions and checking for a newer edit."""
+    if path.resolve() != path.absolute() or not path.is_file():
+        raise OSError(f"{path} changed during Update")
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".great-gui-update-")
+    replacement = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(content)
+        shutil.copystat(path, replacement)
+        os.utime(replacement, None)
+        if path.resolve() != path.absolute() or path.read_bytes() != expected:
+            raise OSError(f"{path} changed during Update")
+        os.replace(replacement, path)
+    finally:
+        replacement.unlink(missing_ok=True)
+
+
+def rollback_working(written):
+    errors = []
+    for path, original, merged in reversed(written):
+        try:
+            replace_working(path, merged, original)
+        except OSError as error:
+            errors.append(str(error))
+    if errors:
+        raise OSError("Could not roll back every file: " + ", ".join(errors))
+
+
 def preview_entries(before, target, scratch):
-    """Return published entries and any additional edits that should stay staged."""
+    """Prepare the incoming index, the edits to keep staged, and the working-file replacements."""
     staged = staged_entries()
     dirty = set(git("diff-files", "--name-only", "-z").split(b"\0"))
     raw = git("diff", "--raw", "--no-abbrev", "--no-renames", "-z", before, target).split(b"\0")
-    align, keep = {}, {}
+    align, keep, changes = {}, {}, []
     for meta, name in zip(raw[0::2], raw[1::2]):
         oldmode, mode, oldoid, oid, _ = meta[1:].split()
         added = oldmode == b"000000"
@@ -69,16 +98,21 @@ def preview_entries(before, target, scratch):
         if not added and (oldmode not in (b"100644", b"100755") or entry is None):
             continue
 
-        incoming = git("cat-file", "blob", oid)
-        base = None if added else git("cat-file", "blob", oldoid)
         local = path.read_bytes()
-        if reconcile(local, base, incoming, scratch) != local:
+        # Git stores normalized blobs. Use checkout-form bytes for the working
+        # file so attributes such as eol=crlf survive a same-file merge.
+        checkout_args = ("cat-file", "--filters", b"--path=" + name)
+        work_base = None if added else git(*checkout_args, oldoid)
+        merged_working = reconcile(local, work_base, git(*checkout_args, oid), scratch)
+        if merged_working is None:
             continue
 
         # Preserve the index and working copy independently when both have edits.
         if entry and entry != (oldmode, oldoid):
             if added or entry[0] not in (b"100644", b"100755"):
                 continue
+            base = git("cat-file", "blob", oldoid)
+            incoming = git("cat-file", "blob", oid)
             merged = reconcile(git("cat-file", "blob", entry[1]), base, incoming, scratch)
             if merged is None:
                 continue
@@ -87,7 +121,9 @@ def preview_entries(before, target, scratch):
                 blob = git("hash-object", "-w", "--stdin", data=merged).strip()
                 keep[name] = staged_mode, blob
         align[name] = mode, oid
-    return align, keep
+        if merged_working != local:
+            changes.append((path, local, merged_working))
+    return align, keep, changes
 
 
 def fast_forward():
@@ -115,14 +151,27 @@ def fast_forward():
         try:
             if git("rev-parse", "HEAD").strip() != before:
                 raise SystemExit("The checkout changed during Update. Run Update again.")
-            align, keep = preview_entries(before, target, Path(directory))
+            align, keep, changes = preview_entries(before, target, Path(directory))
             if not align:
                 sys.stderr.buffer.write(ordinary.stdout)
                 raise SystemExit(ordinary.returncode)
             shutil.copy2(index, lock)
             env = dict(os.environ, GIT_INDEX_FILE=str(lock))
             set_entries(align, env)
+            # Check for other collisions before changing a file. Apply the merged
+            # hunks before the fast-forward so post-merge hooks see the final text.
+            written = []
             try:
+                if changes:
+                    git("read-tree", "--dry-run", "-u", "-m", before, target, env=env)
+                    # Record each atomic replacement before honoring an interruption.
+                    mask = signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+                    try:
+                        for path, original, merged in changes:
+                            replace_working(path, original, merged)
+                            written.append((path, original, merged))
+                    finally:
+                        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
                 subprocess.run(merge, env=env, check=True)
             finally:
                 # A signal or failing hook can arrive after Git moved the branch.
@@ -134,10 +183,12 @@ def fast_forward():
                         set_entries({name: entry for name, entry in keep.items()
                                      if current.get(name) == align[name]}, env)
                     os.replace(lock, index)
+                elif written:
+                    rollback_working(written)
         finally:
             if not advanced:
                 lock.unlink(missing_ok=True)
-        print(f"  recognized {len(align)} published preview file(s); kept local edits")
+        print(f"  reconciled {len(align)} locally edited file(s) with upstream")
 
 
 if __name__ == "__main__":
