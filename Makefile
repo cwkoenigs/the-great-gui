@@ -10,6 +10,7 @@ test:              ## the tests
 	swift test
 
 check: test        ## tests, Tokens.swift agrees with canon's terminal design tokens, and the tools-only build
+	python3 scripts/test_update.py
 	python3 scripts/gen_tokens.py --check
 	DEVELOPER_DIR=/Library/Developer/CommandLineTools swift build --scratch-path .build-clt
 

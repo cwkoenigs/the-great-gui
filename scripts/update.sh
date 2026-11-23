@@ -14,12 +14,9 @@ was_running=0
 if pgrep -af "$BIN" >/dev/null 2>&1; then was_running=1; fi
 
 printf '› pull  %s\n' "$ROOT"
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  printf '  ⚠ local changes here; pulling over them\n'
-fi
 before="$(git rev-parse HEAD)"
-if ! git pull --ff-only; then
-  printf '✗ pull failed · sort it out in %s, then make update again\n' "$ROOT" >&2
+if ! git fetch || ! python3 scripts/update_checkout.py; then
+  printf '✗ update stopped · review the Git error in %s, then run Update again\n' "$ROOT" >&2
   exit 1
 fi
 after="$(git rev-parse HEAD)"

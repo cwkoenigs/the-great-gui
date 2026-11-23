@@ -104,8 +104,10 @@ make update        # pull, rebuild and relink, then quit and reopen the app if i
 
 The same is in the app menu as **Update…**: it runs `make update` in an embedded terminal, in a
 sheet, and, when the script finishes, the window closes and comes
-back on the new build. Settings (⌘,) shows which checkout the running app was built from. If the pull
-cannot fast-forward, the script stops and says so; nothing is rebuilt. Your registry updates separately:
+back on the new build. Settings (⌘,) shows which checkout the running app was built from. Update recognizes tracked preview changes already published upstream
+and identical new files. It keeps separate local work, including staged and unstaged edits in the
+same document. A conflicting edit or a different file at an incoming path stops the update before
+the build. Your registry updates separately:
 `git pull` in `~/.great-gui`, and the window reloads when the file changes.
 
 ## The window

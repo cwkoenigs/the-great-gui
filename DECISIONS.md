@@ -872,3 +872,18 @@ Local decisions for the-great-gui, newest last. Format as in ds-next.
 - **Schedules:** The personal registry keeps its existing launchd labels. Alternate registry paths
   determine their own default labels, logs and pause files. Sync checks the saved job's ownership
   before replacement, cleanup or migration. Explicit scheduler overrides remain supported.
+
+## local-047: Preserve local edits when updating a preview checkout
+
+- **Status:** Accepted
+- **Date:** 2026-11-23
+- **Context:** The Ask Canon demo had copies of newly published files and additional edits in
+  two Markdown files. Git refused the fast-forward before the app could rebuild.
+- **Decision:** Try Git's ordinary fast-forward first. For a blocked regular file, use Git's
+  three-way merge to check that the working copy already contains the incoming changes. A new
+  file must match the incoming content and executable mode. Carry staged edits forward separately
+  from the working copy and let Git check the other paths before advancing the branch.
+- **Verification:** Disposable Git checkouts exercise the app's update script, check both versions
+  of partially staged files, exercise an interrupted merge and verify that a conflict stops before
+  the build. The demo menu updated the original Ask Canon preview from `021b765` to `eed36b2`,
+  rebuilt and reopened. All 19 checked source files and the demo registry retained their contents.
