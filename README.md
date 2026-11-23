@@ -143,6 +143,15 @@ With **ds-next** selected in Settings, the reader and **Open in Browser** use th
 palette in light and dark modes. **Paper and Ink** uses the original docs stylesheet. Reload an open
 browser tab to pick up a palette change.
 
+### Ask about canon
+
+Choose **Codex** or **Cortex** in the chat below the Docs reader. Drag the divider to resize
+the panes. Ask about canon, a team skill, or the page above. `ds-next` searches the local
+checkouts and sends your question, an excerpt from the current page, and relevant matches
+to the selected provider. Citation buttons open those pages above the chat. Follow-ups stay
+in the current app session and only go to the provider that answered them. Use a signed-in
+CLI for that provider and a `ds-next` build that includes `ask-canon`.
+
 ### Reuse CLI and API credentials
 
 In **Secrets**, add the token, password, or text key under a Keychain name, or register a whole

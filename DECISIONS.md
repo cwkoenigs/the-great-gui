@@ -849,6 +849,18 @@ Local decisions for the-great-gui, newest last. Format as in ds-next.
   Keep the current site available during builds and after a build failure. Close the listener
   when Great GUI exits.
 
+## local-045: Ask canon with Codex or Cortex
+
+- **Status:** Accepted
+- **Date:** 2026-11-23
+- **Context:** The embedded docs support browsing and text search. A question may span several
+  standards and procedures.
+- **Decision:** Add Ask Canon to Docs. ds-next searches the configured canon and team skills
+  before sending bounded excerpts and the conversation to the chosen provider. Provider calls
+  run without deployment or Great GUI credential tools. Citations to supplied sources open
+  in the reader above the chat. Great GUI uses the current standard or skill as context
+  and keeps the conversation in memory, scoped to its provider.
+
 ## local-046: Keep runs, registry writes and schedules tied to their owners
 
 - **Status:** Accepted

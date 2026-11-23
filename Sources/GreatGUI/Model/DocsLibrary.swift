@@ -14,6 +14,17 @@ final class DocsLibrary {
     private(set) var url: URL?
     private(set) var revision = 0
     private(set) var note: AppModel.Note?
+    let chat = DocsChat()
+    var showingChat = true
+    private(set) var navigationRevision = 0
+    private(set) var currentSource: String?
+    private var displayedURL: URL?
+    private var sourcePath: String?
+
+    var pageURL: URL? {
+        guard let url else { return nil }
+        return sourcePath.map { url.appending(path: $0) } ?? url
+    }
 
     private let site: URL
     private let cache: URL
@@ -51,8 +62,30 @@ final class DocsLibrary {
         }
     }
 
+    func openSource(_ path: String) {
+        guard Self.isSourcePath(path) else { return }
+        sourcePath = path
+        navigationRevision += 1
+        openCanon()
+    }
+
+    func observePage(_ page: URL?) {
+        guard let url, let page, page.scheme == url.scheme, page.host == url.host, page.port == url.port else {
+            displayedURL = nil
+            currentSource = nil
+            return
+        }
+        displayedURL = page
+        let path = page.path(percentEncoded: true).trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/"
+        currentSource = Self.isSourcePath(path) ? path : nil
+    }
+
+    private static func isSourcePath(_ path: String) -> Bool {
+        path.range(of: #"^(standards|skills)/[a-z0-9][a-z0-9._-]*/$"#, options: .regularExpression) != nil
+    }
+
     func openInBrowser() {
-        guard let url, !openURL(url) else { return }
+        guard let url = displayedURL ?? pageURL, !openURL(url) else { return }
         note = .init(ok: false, text: "Could not open the browser", fix: "Open \(url.absoluteString) in your browser.")
     }
 
@@ -99,6 +132,14 @@ enum DocsBuild {
         return URL.cachesDirectory.appendingPathComponent("com.cwkoenigs.the-great-gui/Docs", isDirectory: true)
     }
 
+    static func toolEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let userBin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        environment["PATH"] = [environment["PATH"], userBin, "/opt/homebrew/bin", "/usr/local/bin"]
+            .compactMap { $0 }.joined(separator: ":")
+        return environment
+    }
+
     /// Build outside any project, then publish the complete site without replacing a good build on failure.
     static func rebuild(in cache: URL, command: String = "exec ds-next docs --out") throws {
         let fm = FileManager.default
@@ -121,10 +162,7 @@ enum DocsBuild {
         process.executableURL = URL(fileURLWithPath: ProcessRun.defaultShell())
         process.arguments = ["-lc", command + " " + Registry.shellQuote(candidate.path)]
         process.currentDirectoryURL = staging
-        var environment = ProcessInfo.processInfo.environment
-        let userBin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
-        environment["PATH"] = [environment["PATH"], userBin, "/opt/homebrew/bin", "/usr/local/bin"]
-            .compactMap { $0 }.joined(separator: ":")
+        var environment = toolEnvironment()
         environment["TMPDIR"] = staging.path
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"

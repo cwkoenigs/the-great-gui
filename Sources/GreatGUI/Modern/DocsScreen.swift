@@ -11,6 +11,8 @@ struct DocsScreen: View {
         let palette = Palette(scheme: scheme)
         let docs = model.docs
         Screen(palette: palette, kicker: "Knowledge base", title: "Docs") {
+            Button(docs.showingChat ? "Hide Chat" : "Ask Canon") { docs.showingChat.toggle() }
+                .secondaryButton(palette)
             if docs.url != nil {
                 Button { docs.openInBrowser() } label: { Label("Open in Browser", systemImage: "arrow.up.right.square") }
                     .secondaryButton(palette)
@@ -26,31 +28,44 @@ struct DocsScreen: View {
             Text("Refresh rebuilds the local knowledge base with ds-next. Use Open in Browser to read it in a separate window.")
                 .font(.callout)
         } content: {
-            VStack(alignment: .leading, spacing: 0) {
-                if docs.building || docs.opening {
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text(docs.building ? "Building docs…" : "Opening canon…")
-                    }
-                    .font(.callout)
-                    .padding(.horizontal, 24).padding(.vertical, 12)
-                    .accessibilityElement(children: .combine)
+            VSplitView {
+                reader(docs, palette)
+                    .frame(minHeight: 180, maxHeight: .infinity)
+                if docs.showingChat {
+                    DocsChatPane(palette: palette, docs: docs)
+                        .frame(minHeight: 215, idealHeight: 260, maxHeight: .infinity)
                 }
-                if let note = docs.note, !note.ok {
-                    NoteLine(note: note, palette: palette).padding(.horizontal, 24).padding(.vertical, 12)
+            }
+        }
+        .onAppear { if docs.builtAt != nil { docs.openCanon() } }
+    }
+
+    private func reader(_ docs: DocsLibrary, _ palette: Palette) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if docs.building || docs.opening {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(docs.building ? "Building docs…" : "Opening canon…")
                 }
-                if let url = docs.url {
-                    DocsWebView(url: url, revision: docs.revision)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if !docs.building && !docs.opening {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Canon and team skills").font(.headline)
-                        Text("Browse standards, decisions, and team procedures.")
-                            .foregroundStyle(palette.muted)
-                    }
-                    .font(.callout)
-                    .padding(24)
+                .font(.callout)
+                .padding(.horizontal, 24).padding(.vertical, 12)
+                .accessibilityElement(children: .combine)
+            }
+            if let note = docs.note, !note.ok {
+                NoteLine(note: note, palette: palette).padding(.horizontal, 24).padding(.vertical, 12)
+            }
+            if let url = docs.pageURL {
+                DocsWebView(url: url, revision: docs.revision, navigationRevision: docs.navigationRevision,
+                            onPageChange: docs.observePage)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !docs.building && !docs.opening {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Canon and team skills").font(.headline)
+                    Text("Browse standards, decisions, and team procedures.")
+                        .foregroundStyle(palette.muted)
                 }
+                .font(.callout)
+                .padding(24)
             }
         }
     }
@@ -60,6 +75,8 @@ private struct DocsWebView: NSViewRepresentable {
     @Environment(\.colorScheme) private var scheme
     let url: URL
     let revision: Int
+    let navigationRevision: Int
+    let onPageChange: (URL?) -> Void
 
     func makeCoordinator() -> Navigation { Navigation() }
 
@@ -67,7 +84,12 @@ private struct DocsWebView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
+        let navigation = context.coordinator
+        webView.navigationDelegate = navigation
+        navigation.urlObservation = webView.observe(\.url, options: [.new]) { [weak navigation] view, _ in
+            let url = view.url
+            Task { @MainActor in navigation?.onPageChange?(url) }
+        }
         return webView
     }
 
@@ -75,8 +97,10 @@ private struct DocsWebView: NSViewRepresentable {
         let appearance: NSAppearance.Name = scheme == .dark ? .darkAqua : .aqua
         if webView.appearance?.name != appearance { webView.appearance = NSAppearance(named: appearance) }
         let navigation = context.coordinator
-        if navigation.origin != url {
+        navigation.onPageChange = onPageChange
+        if navigation.origin != url || navigation.navigationRevision != navigationRevision {
             navigation.origin = url
+            navigation.navigationRevision = navigationRevision
             navigation.revision = revision
             webView.load(URLRequest(url: url))
         } else if navigation.revision != revision {
@@ -92,6 +116,9 @@ private struct DocsWebView: NSViewRepresentable {
     final class Navigation: NSObject, WKNavigationDelegate {
         var origin: URL?
         var revision = 0
+        var navigationRevision = 0
+        var urlObservation: NSKeyValueObservation?
+        var onPageChange: ((URL?) -> Void)?
 
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
