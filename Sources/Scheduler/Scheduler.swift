@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Registry
 
@@ -11,6 +12,11 @@ public struct Scheduler {
     public let stateURL: URL
     public let program: URL
     public let labelPrefix: String
+    private static let personalPrefix = "com.cwkoenigs.the-great-gui.cmd."
+    private let owner: URL
+    private let legacyStateURL: URL
+    private let usesSeparateState: Bool
+    private let migrateLegacyAgents: Bool
     /// What a scheduled run inherits: every GREAT_GUI_* override and the shell, plus GREAT_GUI_SCHEDULED=1.
     public let environment: [String: String]
     /// Runs launchctl; tests put a recorder here.
@@ -18,21 +24,40 @@ public struct Scheduler {
 
     /// `program` is the binary that runs the commands: this app's own, inside its bundle. The folders follow
     /// GREAT_GUI_AGENTS, GREAT_GUI_LOGS and GREAT_GUI_SCHEDULER_STATE; the label prefix GREAT_GUI_AGENT_PREFIX.
-    public init(program: URL, environment env: [String: String] = ProcessInfo.processInfo.environment) {
+    public init(program: URL, registryURL: URL? = nil, environment env: [String: String] = ProcessInfo.processInfo.environment) {
         self.program = program
         let home = FileManager.default.homeDirectoryForCurrentUser
         func path(_ key: String, _ fallback: URL) -> URL {
             if let p = env[key], !p.isEmpty { return URL(fileURLWithPath: NSString(string: p).expandingTildeInPath) }
             return fallback
         }
+        let registry = registryURL ?? Registry.defaultURL(environment: env)
+        let personal = Registry.defaultURL(environment: [:])
+        owner = Self.identity(of: registry)
+        let alternate = owner != Self.identity(of: personal)
+        let explicitPrefix = env["GREAT_GUI_AGENT_PREFIX"].flatMap { $0.isEmpty ? nil : $0 }
+        let digest = SHA256.hash(data: Data(owner.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        let support = home.appendingPathComponent("Library/Application Support/the-great-gui")
+        let logs = home.appendingPathComponent("Library/Logs/the-great-gui")
         agentsDir = path("GREAT_GUI_AGENTS", home.appendingPathComponent("Library/LaunchAgents"))
-        logsDir = path("GREAT_GUI_LOGS", home.appendingPathComponent("Library/Logs/the-great-gui"))
-        stateURL = path("GREAT_GUI_SCHEDULER_STATE", home.appendingPathComponent("Library/Application Support/the-great-gui/scheduler.json"))
-        labelPrefix = env["GREAT_GUI_AGENT_PREFIX"].flatMap { $0.isEmpty ? nil : $0 } ?? "com.cwkoenigs.the-great-gui.cmd."
+        legacyStateURL = path("GREAT_GUI_SCHEDULER_STATE", support.appendingPathComponent("scheduler.json"))
+        stateURL = path("GREAT_GUI_SCHEDULER_STATE", (alternate ? support.appendingPathComponent(digest) : support).appendingPathComponent("scheduler.json"))
+        usesSeparateState = legacyStateURL != stateURL
+        logsDir = path("GREAT_GUI_LOGS", alternate ? logs.appendingPathComponent(digest) : logs)
+        labelPrefix = explicitPrefix ?? (alternate ? "com.cwkoenigs.the-great-gui.registry.\(digest)." : Self.personalPrefix)
+        migrateLegacyAgents = alternate && explicitPrefix == nil
         var passed: [String: String] = ["GREAT_GUI_SCHEDULED": "1"]
         for (k, v) in env where k.hasPrefix("GREAT_GUI_") && k != "GREAT_GUI_SCHEDULED" { passed[k] = v }
+        if alternate || env["GREAT_GUI_REGISTRY"] != nil { passed["GREAT_GUI_REGISTRY"] = registry.path }
+        if usesSeparateState { passed["GREAT_GUI_SCHEDULER_STATE"] = stateURL.path }
         if let shell = env["SHELL"], !shell.isEmpty { passed["SHELL"] = shell }
         environment = passed
+    }
+
+    private static func identity(of url: URL) -> URL {
+        // Atomic saves replace the directory entry. Resolve aliases to its parent, independent of file existence.
+        url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+            .appendingPathComponent(url.lastPathComponent)
     }
 
     public func label(for name: String) -> String { labelPrefix + name }
@@ -72,8 +97,10 @@ public struct Scheduler {
 
     struct State: Codable { var paused: [String] }
 
-    public func paused() -> Set<String> {
-        guard let data = try? Data(contentsOf: stateURL), let s = try? JSONDecoder().decode(State.self, from: data) else { return [] }
+    public func paused() -> Set<String> { Self.paused(at: stateURL) }
+
+    private static func paused(at url: URL) -> Set<String> {
+        guard let data = try? Data(contentsOf: url), let s = try? JSONDecoder().decode(State.self, from: data) else { return [] }
         return Set(s.paused)
     }
 
@@ -85,19 +112,19 @@ public struct Scheduler {
 
     /// Unloads the agent and remembers; `sync` keeps it unloaded until `resume`.
     public func pause(_ name: String, in registry: Registry) throws {
-        guard registry.command(named: name)?.schedule != nil else { throw RegistryError("\(name) has no schedule", fix: "only a scheduled command can be paused") }
-        var p = paused()
-        p.insert(name)
-        try setPaused(p)
-        sync(registry)
+        try changePause(name, in: registry, paused: true)
     }
 
     public func resume(_ name: String, in registry: Registry) throws {
-        guard registry.command(named: name)?.schedule != nil else { throw RegistryError("\(name) has no schedule", fix: "only a scheduled command can be resumed") }
-        var p = paused()
-        p.remove(name)
-        try setPaused(p)
-        sync(registry)
+        try changePause(name, in: registry, paused: false)
+    }
+
+    private func changePause(_ name: String, in registry: Registry, paused: Bool) throws {
+        guard registry.command(named: name)?.schedule != nil else {
+            throw RegistryError("\(name) has no schedule", fix: "only a scheduled command can be paused or resumed")
+        }
+        let report = sync(registry, pauseChange: (name, paused))
+        if !report.problems.isEmpty { throw RegistryError(report.problems.joined(separator: "\n")) }
     }
 
     // MARK: launchd's view
@@ -135,25 +162,87 @@ public struct Scheduler {
     /// for commands that lost their schedule or are gone are unloaded and removed. Safe to call often.
     @discardableResult
     public func sync(_ registry: Registry) -> Report {
+        sync(registry, pauseChange: nil)
+    }
+
+    private func sync(_ registry: Registry, pauseChange: (name: String, paused: Bool)?) -> Report {
         var report = Report()
-        let fm = FileManager.default
-        let paused = paused()
-        let wanted = registry.commands.filter { $0.schedule != nil }
-        let wantedNames = Set(wanted.map(\.name))
-        for f in (try? fm.contentsOfDirectory(atPath: agentsDir.path)) ?? [] where f.hasPrefix(labelPrefix) && f.hasSuffix(".plist") {
-            let name = String(f.dropFirst(labelPrefix.count).dropLast(".plist".count))
-            guard !wantedNames.contains(name) else { continue }
-            bootout(name)
-            try? fm.removeItem(at: agentsDir.appendingPathComponent(f))
-            report.removed.append(name)
+        do {
+            guard Self.identity(of: registry.url) == owner else { throw RegistryError("scheduler belongs to another registry") }
+            let wanted = registry.personal.filter { $0.schedule != nil }
+            if wanted.isEmpty, !FileManager.default.fileExists(atPath: agentsDir.path) { return report }
+            try DirectoryLock.withExclusiveAccess(to: agentsDir, createIfMissing: !wanted.isEmpty) {
+                try reconcile(wanted, pauseChange: pauseChange, into: &report)
+            }
+        } catch {
+            report.problems.append("\(error)")
         }
-        for c in wanted {
+        return report
+    }
+
+    private func reconcile(_ wanted: [Command], pauseChange: (name: String, paused: Bool)?, into report: inout Report) throws {
+        let fm = FileManager.default
+        var paused = paused()
+        if let pauseChange {
+            if pauseChange.paused { paused.insert(pauseChange.name) }
+            else { paused.remove(pauseChange.name) }
+            try setPaused(paused)
+        }
+        let wantedNames = Set(wanted.map(\.name))
+        var blocked: Set<String> = []
+        for filename in try fm.contentsOfDirectory(atPath: agentsDir.path) where filename.hasSuffix(".plist") {
+            let label = String(filename.dropLast(".plist".count))
+            let prefix: String
+            if label.hasPrefix(labelPrefix) { prefix = labelPrefix }
+            else if migrateLegacyAgents, label.hasPrefix(Self.personalPrefix) { prefix = Self.personalPrefix }
+            else { continue }
+            let name = String(label.dropFirst(prefix.count))
+            let legacy = prefix != labelPrefix
+            guard legacy || !wantedNames.contains(name) else { continue }
+            let file = agentsDir.appendingPathComponent(filename)
+            guard ownsAgent(at: file, label: label, command: name) else { continue }
+            do {
+                // Older alternate registries shared the personal label and pause file. Migrate only
+                // a plist whose saved child environment identifies this registry.
+                if legacy, wantedNames.contains(name), name != pauseChange?.name, !paused.contains(name), Self.paused(at: legacyStateURL).contains(name) {
+                    paused.insert(name)
+                    try setPaused(paused)
+                }
+                let service = "\(domain)/\(label)"
+                if try loadedAgent(label: label, at: file), launchctl(["bootout", service]).status != 0 {
+                    throw RegistryError("launchd could not unload \(label)")
+                }
+                try fm.removeItem(at: file)
+                report.removed.append(name)
+            } catch {
+                blocked.insert(name)
+                report.problems.append("\(name): \(error)")
+            }
+        }
+        for c in wanted where !blocked.contains(c.name) {
             let url = agentURL(for: c.name)
+            if fm.fileExists(atPath: url.path), !ownsAgent(at: url, label: label(for: c.name), command: c.name) {
+                report.problems.append("\(c.name): a different or unrecognized job owns \(url.lastPathComponent)")
+                continue
+            }
             guard let data = try? plist(for: c) else { report.problems.append("\(c.name): its agent could not be written"); continue }
-            let loaded = isLoaded(c.name)
+            let loaded: Bool
+            do { loaded = try loadedAgent(label: label(for: c.name), at: url) }
+            catch { report.problems.append("\(error)"); continue }
+            let previous = try? Data(contentsOf: url)
+            if usesSeparateState, c.name != pauseChange?.name, !paused.contains(c.name), let previous,
+               let old = (try? PropertyListSerialization.propertyList(from: previous, format: nil)) as? [String: Any],
+               let env = old["EnvironmentVariables"] as? [String: String], env["GREAT_GUI_SCHEDULER_STATE"] == nil,
+               Self.paused(at: legacyStateURL).contains(c.name) {
+                paused.insert(c.name)
+                try setPaused(paused)
+            }
             let shouldLoad = !paused.contains(c.name)
-            if (try? Data(contentsOf: url)) != data {
-                if loaded { bootout(c.name) }
+            if previous != data {
+                if loaded, !bootout(c.name) {
+                    report.problems.append("\(c.name): launchd could not unload the previous job")
+                    continue
+                }
                 do {
                     try fm.createDirectory(at: agentsDir, withIntermediateDirectories: true)
                     try fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
@@ -165,13 +254,34 @@ public struct Scheduler {
                 }
                 if shouldLoad { load(c.name, into: &report) }
             } else if loaded, !shouldLoad {
-                bootout(c.name)
-                report.unloaded.append(c.name)
+                if bootout(c.name) { report.unloaded.append(c.name) }
+                else { report.problems.append("\(c.name): launchd could not unload the job") }
             } else if !loaded, shouldLoad {
                 load(c.name, into: &report)
             }
         }
-        return report
+    }
+
+    /// Labels are global even when two installations choose different LaunchAgents directories.
+    private func loadedAgent(label: String, at file: URL) throws -> Bool {
+        let job = launchctl(["print", "\(domain)/\(label)"])
+        guard job.status == 0 else { return false }
+        let path = job.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("path = ") }
+        guard let path, FileManager.default.fileExists(atPath: file.path),
+              Self.identity(of: URL(fileURLWithPath: String(path.dropFirst("path = ".count)))) == Self.identity(of: file) else {
+            throw RegistryError("another loaded job owns \(label)")
+        }
+        return true
+    }
+
+    private func ownsAgent(at url: URL, label: String, command: String) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+              plist["Label"] as? String == label,
+              let args = plist["ProgramArguments"] as? [String], args.count == 3, args[1] == "run", args[2] == command,
+              let env = plist["EnvironmentVariables"] as? [String: String], env["GREAT_GUI_SCHEDULED"] == "1" else { return false }
+        return Self.identity(of: Registry.defaultURL(environment: env)) == owner
     }
 
     private func load(_ name: String, into report: inout Report) {

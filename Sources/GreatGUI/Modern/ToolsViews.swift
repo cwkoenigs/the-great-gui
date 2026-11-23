@@ -202,8 +202,8 @@ struct ToolRunSheet: View {
                 if let run { StatusChip(run: run, palette: palette) }
             }
             Text(model.toolsRunSummary).font(.callout).foregroundStyle(palette.muted).lineLimit(2)
-            if let run, run.interactive, running || run.isDone {
-                TerminalPane(run: run, theme: palette.theme) { code in model.finishInteractive(code: code) }
+            if let session = run?.terminalSession {
+                CommandTerminalPane(session: session, theme: palette.theme)
                     .frame(height: 16 * TermFont.line + 16)
                     .padding(8)
                     .codeBlock(palette)

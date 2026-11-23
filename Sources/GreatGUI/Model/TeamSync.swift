@@ -244,8 +244,12 @@ enum TeamSync {
         var made: [String] = []
         for (name, text) in [("commands.toml", exampleRegistry), ("README.md", exampleReadme), ("skills/.gitkeep", "")] {
             let url = dir.appendingPathComponent(name)
-            guard !fm.fileExists(atPath: url.path) else { continue }
-            try text.write(to: url, atomically: true, encoding: .utf8)
+            if name == "commands.toml" {
+                guard try RegistryWriter.createIfMissing(at: url, contents: text) else { continue }
+            } else {
+                guard !fm.fileExists(atPath: url.path) else { continue }
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            }
             made.append(name)
         }
         if !fm.fileExists(atPath: dir.appendingPathComponent(".git").path), UpdateCheck.git(["init", "--quiet"], in: dir, timeout: 15).status == 0 {

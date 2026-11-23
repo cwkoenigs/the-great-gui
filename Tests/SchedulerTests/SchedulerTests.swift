@@ -4,21 +4,22 @@ import Registry
 
 /// A launchd that remembers what is loaded and what was asked of it.
 final class FakeLaunchd {
-    var loaded: Set<String> = []
+    var paths: [String: String] = [:]
+    var loaded: Set<String> { Set(paths.keys) }
     var calls: [[String]] = []
     func run(_ args: [String]) -> (status: Int32, output: String) {
         calls.append(args)
         switch args[0] {
         case "bootstrap":
             let label = URL(fileURLWithPath: args[2]).deletingPathExtension().lastPathComponent
-            loaded.insert(label)
+            paths[label] = args[2]
             return (0, "")
         case "bootout":
             let label = args[1].split(separator: "/").last.map(String.init) ?? ""
-            return loaded.remove(label) == nil ? (113, "Boot-out failed: 113: Could not find specified service") : (0, "")
+            return paths.removeValue(forKey: label) == nil ? (113, "Boot-out failed: 113: Could not find specified service") : (0, "")
         case "print":
             let label = args[1].split(separator: "/").last.map(String.init) ?? ""
-            return loaded.contains(label) ? (0, "\tstate = waiting\n\tlast exit code = 0\n") : (113, "Could not find service")
+            return paths[label].map { (0, "\tpath = \($0)\n\tstate = waiting\n\tlast exit code = 0\n") } ?? (113, "Could not find service")
         default:
             return (1, "unexpected")
         }
@@ -94,6 +95,73 @@ final class SchedulerTests: XCTestCase {
         XCTAssertEqual(launchd.loaded, ["test.gg.a"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: scheduler.agentURL(for: "b").path))
         XCTAssertTrue(launchd.calls.contains(["bootout", "gui/\(getuid())/test.gg.a"]), "a was unloaded before its agent was rewritten")
+    }
+
+    func testSharedLaunchAgentsDirectoryReconcilesOnlyItsOwnRegistry() throws {
+        let personal = Registry.defaultURL(environment: [:])
+        let demo = dir.appendingPathComponent("demo.toml")
+        let env = ["GREAT_GUI_AGENTS": scheduler.agentsDir.path, "GREAT_GUI_LOGS": scheduler.logsDir.path,
+                   "GREAT_GUI_SCHEDULER_STATE": scheduler.stateURL.path]
+        var mine = Scheduler(program: program, registryURL: personal, environment: env)
+        var other = Scheduler(program: program, environment: env.merging(["GREAT_GUI_REGISTRY": demo.path]) { _, new in new })
+        mine.launchctl = launchd.run
+        other.launchctl = launchd.run
+        let cmd = Command(name: "same", run: "true", schedule: try Schedule("daily 09:00"))
+        let a = Registry(url: personal, commands: [cmd]), b = Registry(url: demo, commands: [cmd])
+        XCTAssertNotEqual(mine.label(for: "same"), other.label(for: "same"))
+        XCTAssertTrue(mine.sync(a).problems.isEmpty)
+        XCTAssertTrue(other.sync(b).problems.isEmpty)
+        XCTAssertFalse(mine.sync(b).problems.isEmpty)
+        XCTAssertEqual(launchd.loaded, [mine.label(for: "same"), other.label(for: "same")])
+        XCTAssertEqual(other.sync(Registry(url: demo, commands: [])).removed, ["same"])
+        XCTAssertEqual(launchd.loaded, [mine.label(for: "same")])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mine.agentURL(for: "same").path))
+
+        let defaults = Scheduler(program: program, environment: [:])
+        let alternate = Scheduler(program: program, environment: ["GREAT_GUI_REGISTRY": demo.path])
+        XCTAssertNotEqual(defaults.stateURL, alternate.stateURL)
+        XCTAssertNotEqual(defaults.logsDir, alternate.logsDir)
+        XCTAssertEqual(alternate.labelPrefix, other.labelPrefix)
+    }
+
+    func testMigratesOnlyLegacyJobsWhosePlistNamesThisRegistry() throws {
+        let demo = dir.appendingPathComponent("demo.toml")
+        let personal = Registry.defaultURL(environment: [:])
+        let env = ["GREAT_GUI_AGENTS": scheduler.agentsDir.path, "GREAT_GUI_LOGS": scheduler.logsDir.path,
+                   "GREAT_GUI_SCHEDULER_STATE": scheduler.stateURL.path]
+        var mine = Scheduler(program: program, registryURL: personal, environment: env)
+        var legacy = Scheduler(program: program, registryURL: demo, environment: env.merging(["GREAT_GUI_AGENT_PREFIX": mine.labelPrefix]) { _, new in new })
+        var current = Scheduler(program: program, registryURL: demo, environment: env)
+        mine.launchctl = launchd.run
+        legacy.launchctl = launchd.run
+        current.launchctl = launchd.run
+        let job = Command(name: "task", run: "true", schedule: try Schedule("daily 09:00"))
+        let reg = Registry(url: demo, commands: [job])
+        XCTAssertEqual(legacy.sync(reg).loaded, ["task"])
+        let empty = Registry(url: personal, commands: [])
+        XCTAssertTrue(mine.sync(empty).removed.isEmpty)
+        XCTAssertFalse(mine.sync(Registry(url: personal, commands: [job])).problems.isEmpty)
+        XCTAssertEqual(launchd.loaded, [legacy.label(for: "task")])
+        let migrated = current.sync(reg)
+        XCTAssertEqual(migrated.removed, ["task"])
+        XCTAssertEqual(migrated.loaded, ["task"])
+        XCTAssertEqual(launchd.loaded, [current.label(for: "task")])
+        XCTAssertFalse(current.sync(reg).changed)
+    }
+
+    func testLoadedJobFromAnotherDirectoryCannotBeUnloadedByLabel() throws {
+        let job = Command(name: "shared", run: "true", schedule: try Schedule("daily 09:00"))
+        XCTAssertEqual(scheduler.sync(registry([job])).loaded, ["shared"])
+        let file = scheduler.agentURL(for: "shared")
+        let label = scheduler.label(for: "shared")
+        let foreignFile = dir.appendingPathComponent("elsewhere").appendingPathComponent(file.lastPathComponent)
+        launchd.paths[label] = foreignFile.path
+        let report = scheduler.sync(registry([]))
+        XCTAssertFalse(report.problems.isEmpty)
+        XCTAssertTrue(report.removed.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(launchd.paths[label], foreignFile.path)
+        XCTAssertFalse(launchd.calls.contains { $0.first == "bootout" })
     }
 
     func testPauseAndResume() throws {

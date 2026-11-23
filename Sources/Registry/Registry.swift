@@ -253,8 +253,8 @@ public struct Registry: Equatable, Sendable {
         name.range(of: "^[a-z_][a-z0-9_]*$", options: .regularExpression) != nil
     }
 
-    public static func defaultURL() -> URL {
-        if let p = ProcessInfo.processInfo.environment["GREAT_GUI_REGISTRY"], !p.isEmpty {
+    public static func defaultURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let p = environment["GREAT_GUI_REGISTRY"], !p.isEmpty {
             return URL(fileURLWithPath: NSString(string: p).expandingTildeInPath)
         }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".great-gui/commands.toml")

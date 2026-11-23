@@ -287,14 +287,14 @@ private struct TerminalPanel: View {
     let palette: Palette
 
     var body: some View {
-        if let run = model.run, run.name == command.name, run.interactive, run.status == .running || run.isDone {
+        if let run = model.run, run.name == command.name, let session = run.terminalSession {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     StatusChip(run: run, palette: palette)
                     Spacer()
                     Text(run.isDone ? "the shell has ended" : "ctrl-d leaves").font(.caption).foregroundStyle(palette.muted)
                 }
-                TerminalPane(run: run, theme: palette.theme) { code in model.finishInteractive(code: code) }
+                CommandTerminalPane(session: session, theme: palette.theme)
                     .frame(height: 24 * TermFont.line + 16)
                     .padding(8)
                     .codeBlock(palette)

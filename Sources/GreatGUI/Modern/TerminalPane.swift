@@ -18,8 +18,8 @@ struct TerminalPane: NSViewRepresentable {
         makeTerminal(coordinator: context.coordinator)
     }
 
-    func makeTerminal(coordinator: Coordinator) -> LocalProcessTerminalView {
-        let view = MountedTerminalView(frame: .zero)
+    func makeTerminal(coordinator: Coordinator, initialSize: NSSize? = nil) -> LocalProcessTerminalView {
+        let view = MountedTerminalView(frame: NSRect(origin: .zero, size: initialSize ?? .zero))
         view.processDelegate = coordinator
         view.font = TermFont.nsFont()
         Self.apply(theme, to: view)
@@ -28,7 +28,7 @@ struct TerminalPane: NSViewRepresentable {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         let shell = ProcessRun.defaultShell()
-        view.launch = { [run] terminal in
+        let launch: (LocalProcessTerminalView) -> Void = { [run] terminal in
             terminal.startProcess(executable: shell, args: ["-lic", run.run],
                                   environment: env.map { "\($0.key)=\($0.value)" }, currentDirectory: run.cwd)
             // The split view's lists may hold the keyboard a beat longer.
@@ -39,6 +39,8 @@ struct TerminalPane: NSViewRepresentable {
                 }
             }
         }
+        if initialSize != nil { launch(view) }
+        else { view.launch = launch }
         return view
     }
 
@@ -70,8 +72,96 @@ struct TerminalPane: NSViewRepresentable {
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+        func processFailedToStart(source: TerminalView, error: LocalProcessError) {
+            DispatchQueue.main.async { [onExit] in onExit(nil) }
+        }
         func processTerminated(source: TerminalView, exitCode: Int32?) {
+            source.requestRedraw()
             DispatchQueue.main.async { [onExit] in onExit(exitCode) }
+        }
+    }
+}
+
+/// Created by Run. The PTY, scrollback and exit delegate live together until the run is replaced.
+@MainActor
+final class CommandTerminalSession: NSObject {
+    let terminal: LocalProcessTerminalView
+    private let coordinator: TerminalPane.Coordinator
+
+    init(run: AppModel.RunState, onExit: @escaping (Int32?) -> Void) {
+        let pane = TerminalPane(run: run, theme: .dark, onExit: onExit)
+        coordinator = pane.makeCoordinator()
+        // A nonzero grid also preserves fast output before the first window is attached.
+        let size = NSSize(width: 80 * TermFont.cellWidth, height: 24 * TermFont.line)
+        terminal = pane.makeTerminal(coordinator: coordinator, initialSize: size)
+    }
+}
+
+/// SwiftUI may create several presentations of the same run. Only the host that owns the
+/// terminal accepts input. Another window can bring that same live terminal and its buffer here.
+struct CommandTerminalPane: NSViewRepresentable {
+    let session: CommandTerminalSession
+    let theme: TermTheme
+
+    func makeNSView(context: Context) -> Host { Host(frame: .zero) }
+
+    func updateNSView(_ host: Host, context: Context) {
+        host.display(session, theme: theme)
+    }
+
+    static func dismantleNSView(_ host: Host, coordinator: ()) {
+        host.detach()
+    }
+
+    final class Host: NSView {
+        private var session: CommandTerminalSession?
+        private let showButton = NSButton(title: "Show Terminal Here", target: nil, action: nil)
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            showButton.target = self
+            showButton.action = #selector(attach)
+            showButton.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(showButton)
+            NSLayoutConstraint.activate([
+                showButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+                showButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ])
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        func display(_ next: CommandTerminalSession, theme: TermTheme) {
+            TerminalPane.apply(theme, to: next.terminal)
+            guard session !== next else { return }
+            detach()
+            session = next
+            if next.terminal.window == nil { attach() }
+        }
+
+        func detach() {
+            if let terminal = session?.terminal, terminal.superview === self { terminal.removeFromSuperview() }
+            session = nil
+        }
+
+        @objc private func attach() {
+            guard let terminal = session?.terminal else { return }
+            terminal.removeFromSuperview()
+            terminal.frame = bounds
+            terminal.autoresizingMask = [.width, .height]
+            addSubview(terminal)
+            terminal.requestRedraw()
+            window?.makeFirstResponder(terminal)
+        }
+
+        override func willRemoveSubview(_ subview: NSView) {
+            if subview === session?.terminal { showButton.isHidden = false }
+            super.willRemoveSubview(subview)
+        }
+
+        override func didAddSubview(_ subview: NSView) {
+            super.didAddSubview(subview)
+            if subview === session?.terminal { showButton.isHidden = true }
         }
     }
 }

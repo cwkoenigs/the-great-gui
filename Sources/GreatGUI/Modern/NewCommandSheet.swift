@@ -184,8 +184,8 @@ struct UpdateSheet: View {
             }
             Text("Pulls the checkout, rebuilds the app and relinks the command and the skills. When it finishes, the window closes and comes back on the new build.")
                 .font(.callout).foregroundStyle(palette.muted)
-            if let run, run.interactive, running || run.isDone {
-                TerminalPane(run: run, theme: palette.theme) { code in model.finishInteractive(code: code) }
+            if let session = run?.terminalSession {
+                CommandTerminalPane(session: session, theme: palette.theme)
                     .frame(height: 16 * TermFont.line + 16)
                     .padding(8)
                     .codeBlock(palette)

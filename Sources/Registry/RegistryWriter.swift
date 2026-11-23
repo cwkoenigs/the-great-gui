@@ -179,17 +179,12 @@ public enum RegistryWriter {
     /// Appends the tool (creating the registry when absent). A name that exists is refused.
     @discardableResult
     public static func appendTool(_ t: Tool, to url: URL) throws -> Registry {
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let current = existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Registry(url: url, commands: []) : try Registry.parse(existing, url: url)
-        if current.tool(named: t.name) != nil {
-            throw RegistryError("a tool named \(t.name) exists", fix: "pick another name, or great-gui tools remove \(t.name) first")
+        try change(at: url, createIfMissing: true) { text, current in
+            if current.tool(named: t.name) != nil {
+                throw RegistryError("a tool named \(t.name) exists", fix: "pick another name, or great-gui tools remove \(t.name) first")
+            }
+            return appending(render(t), to: text)
         }
-        let separator = existing.isEmpty || existing.hasSuffix("\n\n") ? "" : (existing.hasSuffix("\n") ? "\n" : "\n\n")
-        let text = existing + separator + render(t)
-        let registry = try Registry.parse(text, url: url)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        return registry
     }
 
     /// A file pointer from text, validated exactly as the loader validates one.
@@ -216,34 +211,58 @@ public enum RegistryWriter {
     /// Appends the file pointer (creating the registry when absent). A name that exists is refused.
     @discardableResult
     public static func appendFile(_ f: SecretFile, to url: URL) throws -> Registry {
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let current = existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Registry(url: url, commands: []) : try Registry.parse(existing, url: url)
-        if current.file(named: f.name) != nil {
-            throw RegistryError("a file named \(f.name) exists", fix: "pick another name, or great-gui file remove \(f.name) first")
+        try change(at: url, createIfMissing: true) { text, current in
+            if current.file(named: f.name) != nil {
+                throw RegistryError("a file named \(f.name) exists", fix: "pick another name, or great-gui file remove \(f.name) first")
+            }
+            return appending(render(f), to: text)
         }
-        let separator = existing.isEmpty || existing.hasSuffix("\n\n") ? "" : (existing.hasSuffix("\n") ? "\n" : "\n\n")
-        let text = existing + separator + render(f)
-        let registry = try Registry.parse(text, url: url)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        return registry
     }
 
     /// Appends the command to the file (creating it when absent), validates the whole file before
     /// writing, and returns the registry as it now is. A name that exists is refused.
     @discardableResult
     public static func append(_ c: Command, to url: URL) throws -> Registry {
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let current = existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Registry(url: url, commands: []) : try Registry.parse(existing, url: url)
-        if current.command(named: c.name) != nil {
-            throw RegistryError("a command named \(c.name) exists", fix: "pick another name, or edit the one in \(url.lastPathComponent)")
+        try change(at: url, createIfMissing: true) { text, current in
+            if current.command(named: c.name) != nil {
+                throw RegistryError("a command named \(c.name) exists", fix: "pick another name, or edit the one in \(url.lastPathComponent)")
+            }
+            return appending(render(c), to: text)
         }
-        let separator = existing.isEmpty || existing.hasSuffix("\n\n") ? "" : (existing.hasSuffix("\n") ? "\n" : "\n\n")
-        let text = existing + separator + render(c)
-        let registry = try Registry.parse(text, url: url)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        return registry
+    }
+
+    static func change(at url: URL, createIfMissing: Bool = false,
+                       _ edit: (String, Registry) throws -> String) throws -> Registry {
+        try DirectoryLock.withExclusiveAccess(to: url.deletingLastPathComponent(), createIfMissing: createIfMissing) {
+            let text: String
+            do {
+                text = try String(contentsOf: url, encoding: .utf8)
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile && createIfMissing {
+                text = ""
+            }
+            let updated = try edit(text, Registry.parse(text, url: url))
+            let registry = try Registry.parse(updated, url: url)
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+            return registry
+        }
+    }
+
+    private static func appending(_ block: String, to text: String) -> String {
+        let separator = text.isEmpty || text.hasSuffix("\n\n") ? "" : (text.hasSuffix("\n") ? "\n" : "\n\n")
+        return text + separator + block
+    }
+
+    /// First launch and team scaffolding can race a CLI add to a new registry.
+    @discardableResult
+    public static func createIfMissing(at url: URL, contents: @autoclosure () throws -> String) throws -> Bool {
+        if FileManager.default.fileExists(atPath: url.path) { return false }
+        return try DirectoryLock.withExclusiveAccess(to: url.deletingLastPathComponent(), createIfMissing: true) {
+            guard !FileManager.default.fileExists(atPath: url.path) else { return false }
+            let text = try contents()
+            _ = try Registry.parse(text, url: url)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            return true
+        }
     }
 
     // MARK: git

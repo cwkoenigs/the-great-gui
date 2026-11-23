@@ -848,3 +848,15 @@ Local decisions for the-great-gui, newest last. Format as in ds-next.
 - **Refresh:** Publish the completed output at the existing cache path and reload the open page.
   Keep the current site available during builds and after a build failure. Close the listener
   when Great GUI exits.
+
+## local-046: Keep runs, registry writes and schedules tied to their owners
+
+- **Status:** Accepted
+- **Date:** 2026-11-23
+- **Decision:** Each interactive Run creates one terminal session. The command detail, Tools and
+  Update windows present that session and its scrollback. Selecting Run again creates a fresh session.
+- **Persistence:** Great GUI writers hold an advisory directory lock from the registry read through
+  the validated atomic save. An editor that opened an older version of the same command reports a conflict.
+- **Schedules:** The personal registry keeps its existing launchd labels. Alternate registry paths
+  determine their own default labels, logs and pause files. Sync checks the saved job's ownership
+  before replacement, cleanup or migration. Explicit scheduler overrides remain supported.

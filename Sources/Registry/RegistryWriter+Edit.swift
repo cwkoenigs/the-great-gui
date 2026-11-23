@@ -83,23 +83,11 @@ extension RegistryWriter {
         return out
     }
 
-    static func read(_ url: URL) throws -> (text: String, registry: Registry) {
-        let text: String
-        do {
-            text = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw RegistryError("no registry at \(url.path)", fix: "great-gui add creates it")
-        }
-        return (text, try Registry.parse(text, url: url))
-    }
-
-    static func write(_ parts: Blocks, to url: URL) throws -> Registry {
+    static func rendered(_ parts: Blocks) -> String {
         var text = parts.preamble + parts.blocks.map(\.text).joined()
         while text.hasSuffix("\n\n") { text.removeLast() }
         if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
-        let registry = try Registry.parse(text, url: url)
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        return registry
+        return text
     }
 
     static func notFound(_ name: String, in url: URL) -> RegistryError {
@@ -116,80 +104,88 @@ extension RegistryWriter {
     /// Rewrites the block named `old` as `c`, keeping the comments above it and the spacing after it.
     /// A new name that another command has is refused.
     @discardableResult
-    public static func replace(_ old: String, with c: Command, in url: URL) throws -> Registry {
-        let (text, current) = try read(url)
-        guard current.command(named: old) != nil else { throw notFound(old, in: url) }
-        if c.name != old, current.command(named: c.name) != nil {
-            throw RegistryError("a command named \(c.name) exists", fix: "pick another name")
+    public static func replace(_ old: String, with c: Command, in url: URL, expecting previous: Command? = nil) throws -> Registry {
+        try change(at: url) { text, current in
+            guard let existing = current.command(named: old) else { throw notFound(old, in: url) }
+            if let previous, previous != existing {
+                throw RegistryError("\(old) changed since it was opened", fix: "reload the command and apply your edit again")
+            }
+            if c.name != old, current.command(named: c.name) != nil {
+                throw RegistryError("a command named \(c.name) exists", fix: "pick another name")
+            }
+            var parts = split(text)
+            guard let i = parts.blocks.firstIndex(where: { $0.kind == .command && $0.name == old }) else { throw unusualShape(old, in: url) }
+            let was = parts.blocks[i].text
+            parts.blocks[i] = Block(name: c.name, text: leadingComments(was) + render(c) + trailingBlanks(was))
+            return rendered(parts)
         }
-        var parts = split(text)
-        guard let i = parts.blocks.firstIndex(where: { $0.kind == .command && $0.name == old }) else { throw unusualShape(old, in: url) }
-        let was = parts.blocks[i].text
-        parts.blocks[i] = Block(name: c.name, text: leadingComments(was) + render(c) + trailingBlanks(was))
-        return try write(parts, to: url)
     }
 
     /// Removes the block, its comments above included.
     @discardableResult
     public static func remove(_ name: String, from url: URL) throws -> Registry {
-        let (text, current) = try read(url)
-        guard current.command(named: name) != nil else { throw notFound(name, in: url) }
-        var parts = split(text)
-        guard let i = parts.blocks.firstIndex(where: { $0.kind == .command && $0.name == name }) else { throw unusualShape(name, in: url) }
-        parts.blocks.remove(at: i)
-        return try write(parts, to: url)
+        try change(at: url) { text, current in
+            guard current.command(named: name) != nil else { throw notFound(name, in: url) }
+            var parts = split(text)
+            guard let i = parts.blocks.firstIndex(where: { $0.kind == .command && $0.name == name }) else { throw unusualShape(name, in: url) }
+            parts.blocks.remove(at: i)
+            return rendered(parts)
+        }
     }
 
     /// Removes a `[[file]]` block, its comments above included. The Keychain item and the file on disk are not its business.
     @discardableResult
     public static func removeFile(_ name: String, from url: URL) throws -> Registry {
-        let (text, current) = try read(url)
-        guard current.file(named: name) != nil else {
-            throw RegistryError("no file named \(name)", fix: "great-gui file lists the names in \(url.lastPathComponent)")
+        try change(at: url) { text, current in
+            guard current.file(named: name) != nil else {
+                throw RegistryError("no file named \(name)", fix: "great-gui file lists the names in \(url.lastPathComponent)")
+            }
+            var parts = split(text)
+            guard let i = parts.blocks.firstIndex(where: { $0.kind == .file && $0.name == name }) else { throw unusualShape(name, in: url) }
+            parts.blocks.remove(at: i)
+            return rendered(parts)
         }
-        var parts = split(text)
-        guard let i = parts.blocks.firstIndex(where: { $0.kind == .file && $0.name == name }) else { throw unusualShape(name, in: url) }
-        parts.blocks.remove(at: i)
-        return try write(parts, to: url)
     }
 
     /// Removes a `[[tool]]` block, its comments above included. Nothing is uninstalled.
     @discardableResult
     public static func removeTool(_ name: String, from url: URL) throws -> Registry {
-        let (text, current) = try read(url)
-        guard current.tool(named: name) != nil else {
-            throw RegistryError("no tool named \(name)", fix: "great-gui tools lists the names in \(url.lastPathComponent)")
+        try change(at: url) { text, current in
+            guard current.tool(named: name) != nil else {
+                throw RegistryError("no tool named \(name)", fix: "great-gui tools lists the names in \(url.lastPathComponent)")
+            }
+            var parts = split(text)
+            guard let i = parts.blocks.firstIndex(where: { $0.kind == .tool && $0.name == name }) else { throw unusualShape(name, in: url) }
+            parts.blocks.remove(at: i)
+            return rendered(parts)
         }
-        var parts = split(text)
-        guard let i = parts.blocks.firstIndex(where: { $0.kind == .tool && $0.name == name }) else { throw unusualShape(name, in: url) }
-        parts.blocks.remove(at: i)
-        return try write(parts, to: url)
     }
 
     /// Puts the blocks in the order given, one blank line between them. `names` must name every command once.
     @discardableResult
     public static func reorder(_ names: [String], in url: URL) throws -> Registry {
-        let (text, current) = try read(url)
-        let have = current.commands.map(\.name)
-        guard names.count == have.count, Set(names) == Set(have) else {
-            throw RegistryError("reorder needs every command exactly once", fix: "\(names.count) given, \(have.count) in \(url.lastPathComponent)")
+        try change(at: url) { text, current in
+            let have = current.commands.map(\.name)
+            guard names.count == have.count, Set(names) == Set(have) else {
+                throw RegistryError("reorder needs every command exactly once", fix: "\(names.count) given, \(have.count) in \(url.lastPathComponent)")
+            }
+            let parts = split(text)
+            var byName: [String: Block] = [:]
+            for b in parts.blocks where b.kind == .command { if let n = b.name { byName[n] = b } }
+            guard byName.count == have.count, names.allSatisfy({ byName[$0] != nil }) else {
+                throw RegistryError("could not tell the blocks apart in \(url.lastPathComponent)",
+                                    fix: "a block is not in the usual shape; edit the file by hand (⌥⌘E)")
+            }
+            func spaced(_ b: Block) -> Block {
+                var body = Substring(b.text)
+                while body.hasSuffix("\n") { body = body.dropLast() }
+                return Block(kind: b.kind, name: b.name, text: body + "\n\n")
+            }
+            // The commands take the new order in the slots commands held; a [[file]] block keeps its place.
+            var next = names.makeIterator()
+            let ordered = parts.blocks.map { b in b.kind == .command ? spaced(byName[next.next()!]!) : spaced(b) }
+            return rendered(Blocks(preamble: parts.preamble, blocks: ordered))
         }
-        let parts = split(text)
-        var byName: [String: Block] = [:]
-        for b in parts.blocks where b.kind == .command { if let n = b.name { byName[n] = b } }
-        guard byName.count == have.count, names.allSatisfy({ byName[$0] != nil }) else {
-            throw RegistryError("could not tell the blocks apart in \(url.lastPathComponent)",
-                                fix: "a block is not in the usual shape; edit the file by hand (⌥⌘E)")
-        }
-        func spaced(_ b: Block) -> Block {
-            var body = Substring(b.text)
-            while body.hasSuffix("\n") { body = body.dropLast() }
-            return Block(kind: b.kind, name: b.name, text: body + "\n\n")
-        }
-        // The commands take the new order in the slots commands held; a [[file]] block keeps its place.
-        var next = names.makeIterator()
-        let ordered = parts.blocks.map { b in b.kind == .command ? spaced(byName[next.next()!]!) : spaced(b) }
-        return try write(Blocks(preamble: parts.preamble, blocks: ordered), to: url)
     }
 
     // MARK: the form's text fields, from a command

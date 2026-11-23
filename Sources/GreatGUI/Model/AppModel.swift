@@ -92,7 +92,8 @@ final class AppModel {
     // MARK: a new or edited command (⌘N, ⌘E), a delete (⌘⌫)
     private(set) var newCommandOpen = false
     /// The command the open form edits; nil when the form adds.
-    private(set) var editingName: String?
+    private var editingCommand: Command?
+    var editingName: String? { editingCommand?.name }
     var isEditing: Bool { editingName != nil }
     /// The command a delete confirmation is open for.
     private(set) var pendingDelete: String?
@@ -232,6 +233,7 @@ final class AppModel {
         var interactive: Bool
         var env: [String: String] = [:]
         var redact: [String] = []
+        var terminalSession: CommandTerminalSession?
         var lines: [String] = []
         var status: RunStatus = .running
         var startedAt = Date()
@@ -273,7 +275,7 @@ final class AppModel {
         self.store = store
         self.secrets = secrets
         credentialProfiles = CredentialProfiles(registryURL: registryURL, service: secrets.service, preferences: preferences)
-        self.scheduler = scheduler ?? Scheduler(program: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+        self.scheduler = scheduler ?? Scheduler(program: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]), registryURL: registryURL)
         self.history = store.load()
         reload()
         if watch {
@@ -333,10 +335,7 @@ final class AppModel {
 
     /// A fresh install starts from the example that ships with the app.
     private func ensureRegistryFile() throws {
-        let fm = FileManager.default
-        guard !fm.fileExists(atPath: registryURL.path) else { return }
-        try fm.createDirectory(at: registryURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Registry.exampleTOML().write(to: registryURL, atomically: true, encoding: .utf8)
+        try RegistryWriter.createIfMissing(at: registryURL, contents: Registry.exampleTOML())
     }
 
     // MARK: picking
@@ -376,15 +375,16 @@ final class AppModel {
             run = RunState(name: c.name, run: "", cwd: nil, interactive: false, status: .failed(what: "\(error)", fix: ""))
             return
         }
-        run = RunState(name: c.name, run: resolved.run, cwd: resolved.cwd, interactive: resolved.interactive,
-                       status: resolved.gate ? .gating : .running)
+        let state = RunState(name: c.name, run: resolved.run, cwd: resolved.cwd, interactive: resolved.interactive,
+                             status: resolved.gate ? .gating : .running)
+        run = state
         guard resolved.gate else {
             launch(c, resolved)
             return
         }
         Task { @MainActor [weak self] in
             let outcome = await Gate.ask("run \(c.name)")
-            guard let self, let r = self.run, r.name == c.name, r.status == .gating else { return }
+            guard let self, self.run?.id == state.id, self.run?.status == .gating else { return }
             switch outcome {
             case .allowed:
                 self.launch(c, resolved)
@@ -442,9 +442,19 @@ final class AppModel {
         run?.redact = redact
         run?.startedAt = Date()
         run?.status = .running
-        if resolved.interactive { return }   // the terminal pane starts the process when it appears
+        guard let state = run else { return }
+        let id = state.id
+        if resolved.interactive {
+            run?.terminalSession = CommandTerminalSession(run: state) { [weak self] code in
+                self?.finishInteractive(id: id, code: code)
+            }
+            return
+        }
         let p = ProcessRun(run: resolved.run, cwd: resolved.cwd, env: env, redact: redact) { [weak self] event in
-            Task { @MainActor in self?.handle(event) }
+            Task { @MainActor in
+                guard self?.run?.id == id else { return }
+                self?.handle(event)
+            }
         }
         do {
             try p.start()
@@ -466,8 +476,8 @@ final class AppModel {
     }
 
     /// The terminal pane reports the shell's exit.
-    func finishInteractive(code: Int32?) {
-        guard let r = run, r.interactive, r.status == .running else { return }
+    private func finishInteractive(id: UUID, code: Int32?) {
+        guard let r = run, r.id == id, r.interactive, r.status == .running else { return }
         finish(code: code ?? -1, seconds: (Date().timeIntervalSince(r.startedAt) * 10).rounded() / 10, mode: "tty")
         if r.name == Self.updateName, code == 0 { relaunch() }
     }
@@ -550,7 +560,7 @@ final class AppModel {
     func openNewCommand() {
         registryNote = nil
         pendingDelete = nil
-        editingName = nil
+        editingCommand = nil
         copyOf = nil
         suggestedSchedule = nil
         draft = Draft()
@@ -591,7 +601,8 @@ final class AppModel {
         pendingDelete = nil
         draft = Draft(c)
         // The team's command is read-only here: its form adds a copy to the person's own file, which wins.
-        editingName = c.origin == .team ? nil : c.name
+        editingCommand = c.origin == .team ? nil : c
+        editingCommand?.overridesTeam = false
         registryIsRepository = RegistryWriter.isRepository(registryURL)
         prepareForm()
         copyOf = c.origin == .team ? c.name : nil
@@ -608,7 +619,7 @@ final class AppModel {
 
     func closeNewCommand() {
         newCommandOpen = false
-        editingName = nil
+        editingCommand = nil
         exampleNote = nil
         copyOf = nil
         suggestedSchedule = nil
@@ -644,7 +655,7 @@ final class AppModel {
             let registry: Registry
             let message: String
             if let old = editingName {
-                registry = try RegistryWriter.replace(old, with: command, in: registryURL)
+                registry = try RegistryWriter.replace(old, with: command, in: registryURL, expecting: editingCommand)
                 message = old == command.name ? "edit \(command.name)" : "rename \(old) to \(command.name)"
             } else {
                 registry = try RegistryWriter.append(command, to: registryURL)
@@ -655,7 +666,7 @@ final class AppModel {
             let edited = editingName != nil
             adopt(registry)
             newCommandOpen = false
-            editingName = nil
+            editingCommand = nil
             copyOf = nil
             suggestedSchedule = nil
             if case .group(let g) = destination, g != command.group { destination = .group(command.group) }
@@ -758,7 +769,7 @@ final class AppModel {
             return
         }
         newCommandOpen = false
-        editingName = nil
+        editingCommand = nil
         pendingDelete = nil
         registryNote = nil
         let c = Command(name: Self.updateName, group: "the-great-gui", desc: "pull, rebuild, reopen", run: "make update",

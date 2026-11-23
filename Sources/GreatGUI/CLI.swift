@@ -273,7 +273,7 @@ enum CLI {
                 if json { emit(["ok": true, "action": "unchanged", "command": describe(old), "path": url.path]) } else { print("✓ \(name) unchanged · nothing given to change") }
                 return 0
             }
-            let registry = try RegistryWriter.replace(name, with: command, in: url)
+            let registry = try RegistryWriter.replace(name, with: command, in: url, expecting: old)
             let message = command.name == name ? "edit \(name)" : "rename \(name) to \(command.name)"
             var facts = [count(registry.commands.count, "command"), url.path]
             if f.commit, RegistryWriter.autoCommit(url, message: message) { facts.append("committed") }

@@ -130,18 +130,26 @@ enum Snapshot {
                         secrets: SecretStore(service: "com.cwkoenigs.the-great-gui.snapshot"), scheduler: inertScheduler(in: tmp), watch: false)
     }
 
-    /// A scheduler that can reach nothing real: its folders are under `dir`, its label prefix is its own,
-    /// and launchctl is never called. A model always syncs the agents to its registry when it loads; with
-    /// the real scheduler, drawing the example registry would unload and delete every real scheduled
-    /// command's agent, because none of them is in the example (found 2026-11-13, DECISIONS local-033).
-    static func inertScheduler(in dir: URL) -> Scheduler {
-        var scheduler = Scheduler(program: URL(fileURLWithPath: "/usr/bin/true"), environment: [
+    /// A model reconciles schedules on load. Snapshots keep agent files and simulated launchd
+    /// state in the fixture so that rendering a window never installs a login job.
+    static func inertScheduler(in dir: URL, registryURL: URL? = nil) -> Scheduler {
+        var scheduler = Scheduler(program: URL(fileURLWithPath: "/usr/bin/true"), registryURL: registryURL ?? dir.appendingPathComponent("commands.toml"), environment: [
             "GREAT_GUI_AGENTS": dir.appendingPathComponent("agents").path,
             "GREAT_GUI_LOGS": dir.appendingPathComponent("logs").path,
             "GREAT_GUI_SCHEDULER_STATE": dir.appendingPathComponent("scheduler.json").path,
             "GREAT_GUI_AGENT_PREFIX": "the-great-gui.snapshot.",
         ])
-        scheduler.launchctl = { _ in (0, "") }
+        var loaded: [String: String] = [:]
+        scheduler.launchctl = { args in
+            let label = URL(fileURLWithPath: args.last ?? "").lastPathComponent
+            switch args.first {
+            case "bootstrap": loaded[URL(fileURLWithPath: label).deletingPathExtension().lastPathComponent] = args.last
+            case "bootout": loaded[label] = nil
+            case "print": return loaded[label].map { (0, "path = \($0)\nstate = waiting") } ?? (113, "")
+            default: break
+            }
+            return (0, "")
+        }
         return scheduler
     }
 

@@ -68,6 +68,39 @@ final class RegistryWriterTests: XCTestCase {
         XCTAssertEqual(try Registry.load(from: url).commands.count, 2, "a refused append changes nothing")
     }
 
+    func testConcurrentRegistryMutationsKeepEveryBlock() async throws {
+        let url = temp()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for i in 0..<16 {
+                group.addTask { try RegistryWriter.append(Command(name: "c-\(i)", run: "true"), to: url) }
+                group.addTask { try RegistryWriter.appendTool(Tool(name: "t-\(i)", method: .script, install: "echo ok"), to: url) }
+                group.addTask { try RegistryWriter.appendFile(SecretFile(name: "f-\(i)", path: "~/fixture"), to: url) }
+            }
+            try await group.waitForAll()
+        }
+        let saved = try Registry.load(from: url)
+        XCTAssertEqual(saved.commands.count, 16)
+        XCTAssertEqual(saved.tools.count, 16)
+        XCTAssertEqual(saved.files.count, 16)
+    }
+
+    func testStaleEditAndUnreadableRegistryPreserveExistingData() throws {
+        let url = temp()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let old = Command(name: "check", run: "echo old")
+        try RegistryWriter.append(old, to: url)
+        let updated = Command(name: "check", run: "echo new")
+        try RegistryWriter.replace("check", with: updated, in: url, expecting: old)
+        XCTAssertThrowsError(try RegistryWriter.replace("check", with: old, in: url, expecting: old))
+        XCTAssertEqual(try Registry.load(from: url).commands, [updated])
+
+        let unreadable = Data([0xff, 0xfe, 0xfa])
+        try unreadable.write(to: url)
+        XCTAssertThrowsError(try RegistryWriter.append(old, to: url))
+        XCTAssertEqual(try Data(contentsOf: url), unreadable)
+    }
+
     func testAutoCommitOnlyInARepository() throws {
         let url = temp()
         try RegistryWriter.append(Command(name: "a", run: "true"), to: url)

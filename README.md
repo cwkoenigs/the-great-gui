@@ -240,6 +240,10 @@ window asks for permission once a schedule exists). The window's Scheduled entry
 detail shows the phrase, the next run and the last outcome, the Log tab shows the last run's output, and
 Pause / Resume unloads or reloads the agent without touching the file (`great-gui pause|resume NAME`).
 
+Setting `GREAT_GUI_REGISTRY` to another file gives its schedules distinct launchd labels, logs and pause
+state by default. An existing installation can still supply its own scheduler paths and label prefix.
+The first sync migrates older default-label jobs whose plist identifies the alternate registry.
+
 Three things cannot be scheduled, and the registry says so: a gated command (Touch ID needs the window),
 an interactive one (no terminal at 08:30), and one whose parameters have no defaults.
 

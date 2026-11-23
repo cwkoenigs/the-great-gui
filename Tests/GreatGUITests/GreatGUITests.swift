@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 import Registry
 import Scheduler
 import Secrets
@@ -45,7 +47,7 @@ final class GreatGUITests: XCTestCase {
         }
         try "".write(to: registry, atomically: true, encoding: .utf8)
         let m = AppModel(registryURL: registry, store: history, secrets: store,
-                         scheduler: Snapshot.inertScheduler(in: dir), watch: false, preferences: preferences)
+                         scheduler: Snapshot.inertScheduler(in: dir, registryURL: registry), watch: false, preferences: preferences)
         m.openSecretSheet(named: name)
         m.newSecretValue = "fixture8"
         m.saveSecretFromSheet()
@@ -134,6 +136,64 @@ final class GreatGUITests: XCTestCase {
         try await waitFor { profiles.checking == nil }
         XCTAssertEqual(profiles.results[profile.id]?.text, "Credential file fixture-env is not on this Mac")
         XCTAssertFalse(FileManager.default.fileExists(atPath: uri.path))
+    }
+
+    func testTerminalNavigationPreservesOutputAndOnlyRunStartsAnotherShell() async throws {
+        let m = try model("""
+            [[command]]
+            name = "counter"
+            interactive = true
+            cwd = "\(dir.path)"
+            run = "echo turn >> turns.txt && echo finished"
+            """)
+        m.select("counter")
+        m.runSelected()
+        try await waitFor { m.run?.isDone == true }
+        let first = try XCTUnwrap(m.run?.terminalSession)
+        let command = try XCTUnwrap(m.selectedCommand)
+        let frame = NSRect(x: 0, y: 0, width: 900, height: 740)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+        window.contentView = NSHostingView(rootView: CommandDetail(command: command).environment(m))
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+        try await waitFor { first.terminal.window === window }
+        m.detailTab = .history
+        try await waitFor { first.terminal.window == nil }
+        m.detailTab = .terminal
+        try await waitFor { first.terminal.window === window }
+        XCTAssertTrue(String(decoding: first.terminal.getBufferAsData(), as: UTF8.self).contains("finished"))
+        let second = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+        let host = CommandTerminalPane.Host(frame: frame)
+        second.contentView = host
+        defer { second.orderOut(nil) }
+        host.display(first, theme: .dark)
+        XCTAssertTrue(first.terminal.window === window)
+        let transfer = try XCTUnwrap(host.subviews.compactMap { $0 as? NSButton }.first)
+        transfer.performClick(nil)
+        XCTAssertTrue(first.terminal.window === second)
+        XCTAssertTrue(String(decoding: first.terminal.getBufferAsData(), as: UTF8.self).contains("finished"))
+        let turns = dir.appendingPathComponent("turns.txt")
+        XCTAssertEqual(try String(contentsOf: turns, encoding: .utf8), "turn\n")
+        m.runSelected()
+        try await waitFor { m.run?.isDone == true && m.run?.terminalSession?.terminal.window === window }
+        XCTAssertFalse(m.run?.terminalSession === first)
+        XCTAssertEqual(try String(contentsOf: turns, encoding: .utf8), "turn\nturn\n")
+        XCTAssertEqual(m.history.map(\.name), ["counter", "counter"])
+    }
+
+    func testExitFromReplacedProcessCannotFinishTheNewTerminalRun() async throws {
+        let m = try model("")
+        let marker = dir.appendingPathComponent("release-first").path
+        m.startAsIs(name: "first", run: "while [ ! -f '\(marker)' ]; do sleep 0.05; done; exit 17", interactive: false)
+        m.startAsIs(name: "second", run: "read -r answer; echo finished", interactive: true)
+        let session = try XCTUnwrap(m.run?.terminalSession)
+        try Data().write(to: URL(fileURLWithPath: marker))
+        // Let the first process exit while the second is still waiting for input.
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(m.run?.status, .running)
+        session.terminal.send(txt: "done\n")
+        try await waitFor { m.run?.isDone == true }
+        XCTAssertEqual(m.history.filter { $0.name == "second" }.map(\.code), [0])
     }
 
     private func waitFor(_ condition: () -> Bool) async throws {
