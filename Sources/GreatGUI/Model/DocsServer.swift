@@ -1,16 +1,19 @@
 import Foundation
 import Network
+import TerminalDesign
 import UniformTypeIdentifiers
 
 /// A read-only static file server, bound to IPv4 loopback on a port assigned by macOS.
 final class DocsServer {
     private let site: URL
+    private let palette: () -> TermPalette
     private let listener: NWListener
     private let queue = DispatchQueue(label: "the-great-gui.docs-http")
     private static let headerEnd = Data("\r\n\r\n".utf8)
     private static let headerLimit = 16 * 1024
 
-    init(site: URL) throws {
+    init(site: URL, palette: @escaping () -> TermPalette = { .current }) throws {
+        self.palette = palette
         self.site = site
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -86,7 +89,8 @@ final class DocsServer {
         }
         let type = file.pathExtension == "js" ? "text/javascript" :
             (UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream")
-        reply(connection, status: "200 OK", type: type, body: data, head: line[0] == "HEAD")
+        let body = file.pathExtension == "html" ? DocsTheme.apply(to: data, palette: palette()) : data
+        reply(connection, status: "200 OK", type: type, body: body, head: line[0] == "HEAD")
     }
 
     private func file(for target: String) -> URL? {

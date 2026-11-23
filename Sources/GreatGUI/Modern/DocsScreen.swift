@@ -57,6 +57,7 @@ struct DocsScreen: View {
 }
 
 private struct DocsWebView: NSViewRepresentable {
+    @Environment(\.colorScheme) private var scheme
     let url: URL
     let revision: Int
 
@@ -71,6 +72,8 @@ private struct DocsWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        let appearance: NSAppearance.Name = scheme == .dark ? .darkAqua : .aqua
+        if webView.appearance?.name != appearance { webView.appearance = NSAppearance(named: appearance) }
         let navigation = context.coordinator
         if navigation.origin != url {
             navigation.origin = url

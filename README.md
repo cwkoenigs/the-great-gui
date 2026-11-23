@@ -139,6 +139,10 @@ to read it in a separate browser tab.
 Set up the docs renderer in `ds-next` first. Great GUI needs `ds-next` and Node.js on your
 PATH. To test with a separate docs cache, set `GREAT_GUI_DOCS_CACHE` to a different directory.
 
+With **ds-next** selected in Settings, the reader and **Open in Browser** use the same grey-and-steel
+palette in light and dark modes. **Paper and Ink** uses the original docs stylesheet. Reload an open
+browser tab to pick up a palette change.
+
 ### Reuse CLI and API credentials
 
 In **Secrets**, add the token, password, or text key under a Keychain name, or register a whole
